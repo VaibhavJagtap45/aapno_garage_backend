@@ -1,8 +1,9 @@
 const router = require("express").Router();
 const protect = require("../middlewares/auth");
+const checkSubscription = require("../middlewares/checkSubscription");
 const { listExpenses, getExpenseStats, createExpense, deleteExpense } = require("../controllers/expense.controller");
 
-router.use(protect);
+router.use(protect, checkSubscription);
 
 // GET /api/v1/expenses/stats?dateFrom=&dateTo=
 router.get("/stats", getExpenseStats);

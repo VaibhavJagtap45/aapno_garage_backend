@@ -61,32 +61,6 @@ const bookingSchema = new mongoose.Schema(
       ref: "RepairOrder",
       default: null,
     },
-    googleCalendar: {
-      syncStatus: {
-        type: String,
-        enum: ["not_connected", "not_configured", "synced", "failed", "deleted"],
-        default: undefined,
-      },
-      eventId: {
-        type: String,
-        trim: true,
-        default: null,
-      },
-      htmlLink: {
-        type: String,
-        trim: true,
-        default: null,
-      },
-      syncedAt: {
-        type: Date,
-        default: null,
-      },
-      lastError: {
-        type: String,
-        trim: true,
-        default: null,
-      },
-    },
   },
   { timestamps: true },
 );

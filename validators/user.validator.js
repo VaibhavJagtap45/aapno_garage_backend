@@ -111,9 +111,9 @@ const addUserSchema = z
       .optional(),
     fullName: z.string().min(2, "Min 2 characters").max(100).trim().optional(),
     address: z.string().trim().optional(),
-    role: z.enum(["customer", "member", "vendor"], {
+    role: z.enum(["customer", "member", "vendor", "manager"], {
       errorMap: () => ({
-        message: "Role must be one of: customer, member, vendor",
+        message: "Role must be one of: customer, member, vendor, manager",
       }),
     }),
 

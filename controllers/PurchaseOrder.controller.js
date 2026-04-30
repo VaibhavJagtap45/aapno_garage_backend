@@ -134,7 +134,7 @@ const deletePurchaseOrder = asyncHandler(async (req, res) => {
   const order = await PurchaseOrder.findOneAndUpdate(
     { _id: req.params.id, garageId, isDeleted: false },
     { isDeleted: true },
-    { new: true },
+    { returnDocument: "after" },
   );
 
   if (!order) return sendError(res, 404, "Purchase order not found.");

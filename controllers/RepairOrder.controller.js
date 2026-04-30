@@ -2,12 +2,24 @@ const RepairOrder = require("../models/RepairOrder.model");
 const Vehicle = require("../models/Vehicle.model");
 const User = require("../models/User.model");
 const Garage = require("../models/Garage.model");
+const GarageServiceCatalog = require("../models/GarageServiceCatalog.model");
+const Inventory = require("../models/Inventry.model");
 const { sendWhatsApp } = require("../utils/whatsapp");
 const asyncHandler = require("../utils/asyncHandler");
 const { sendSuccess, sendError } = require("../utils/response.utils");
 const resolveGarageId = require("../utils/resolveGarageId");
-const escapeRegex     = require("../utils/escapeRegex");
-const { notifyUser, notifyBoth, TEMPLATES } = require("../services/pushNotification.service");
+const escapeRegex = require("../utils/escapeRegex");
+const {
+  normalizeRepairServiceLines,
+  normalizeRepairPartLines,
+  computeRepairOrderTotals,
+} = require("../utils/lineItemMath");
+const {
+  notifyUser,
+  notifyBoth,
+  TEMPLATES,
+} = require("../services/pushNotification.service");
+const incrementUsage = require("../utils/incrementUsage");
 
 async function nextOrderNo(garageId) {
   // Find the actual highest orderNo for this garage — safe against deletions and
@@ -17,7 +29,9 @@ async function nextOrderNo(garageId) {
     { orderNo: 1 },
     { sort: { orderNo: -1 } },
   ).lean();
-  const lastNum = last?.orderNo ? parseInt(last.orderNo.replace(/\D/g, ""), 10) || 0 : 0;
+  const lastNum = last?.orderNo
+    ? parseInt(last.orderNo.replace(/\D/g, ""), 10) || 0
+    : 0;
   return `RO-${String(lastNum + 1).padStart(5, "0")}`;
 }
 
@@ -69,7 +83,9 @@ const searchCustomers = asyncHandler(async (req, res) => {
 
   // 4. Build lookup maps
   const customerMap = {};
-  allCustomers.forEach((c) => { customerMap[String(c._id)] = c; });
+  allCustomers.forEach((c) => {
+    customerMap[String(c._id)] = c;
+  });
 
   const vehiclesByCustomer = {};
   allVehicles.forEach((v) => {
@@ -97,35 +113,136 @@ const searchCustomers = asyncHandler(async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────
-//  GET /api/v1/repair-orders/search-vehicle?regNo=MH12AB1234
-//  Returns vehicle + customer info for the given registration number
+//  GET /api/v1/repair-orders/search-vehicle?regNo=&q=
+//  When q or regNo is provided: searches vehicles by reg number,
+//  customer name, or phone number.
+//  When neither is provided: returns all customer-vehicle pairs
+//  for this garage (most recent first, capped at 50).
 // ─────────────────────────────────────────────────────────────────
 const searchVehicleByRegNo = asyncHandler(async (req, res) => {
-  const { regNo } = req.query;
-  if (!regNo?.trim())
-    return sendError(res, 400, "regNo query param is required.");
+  const garageId = await resolveGarageId(req.user);
+  const { regNo, q } = req.query;
+  const query = (q || regNo || "").trim();
 
-  const vehicles = await Vehicle.find({
-    vehicleRegisterNo: { $regex: new RegExp(escapeRegex(regNo.trim()), "i") },
-  }).limit(20).lean();
+  const garageCustomerIds = await RepairOrder.distinct("customerId", {
+    garageId,
+    isDeleted: false,
+  });
 
-  if (!vehicles.length)
-    return sendError(
-      res,
-      404,
-      `No vehicle found with registration "${regNo}".`,
-    );
+  if (!garageCustomerIds.length) {
+    return sendSuccess(res, 200, "Vehicles found.", { results: [] });
+  }
 
-  const results = await Promise.all(
-    vehicles.map(async (vehicle) => {
-      const customer = await User.findById(vehicle.user)
-        .select("fullName phoneNo emailId role")
-        .lean();
-      return { vehicle, customer };
-    }),
-  );
+  if (!query) {
+    const [customers, vehicles] = await Promise.all([
+      User.find({ _id: { $in: garageCustomerIds } })
+        .select("_id fullName phoneNo emailId")
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .lean(),
+      Vehicle.find({ user: { $in: garageCustomerIds } })
+        .select(
+          "_id vehicleBrand vehicleModel vehicleVariant vehicleRegisterNo user",
+        )
+        .sort({ createdAt: -1 })
+        .lean(),
+    ]);
 
-  return sendSuccess(res, 200, "Vehicles found.", { results });
+    const vehiclesByUser = {};
+    vehicles.forEach((v) => {
+      const uid = String(v.user);
+      if (!vehiclesByUser[uid]) vehiclesByUser[uid] = [];
+      vehiclesByUser[uid].push(v);
+    });
+
+    const results = [];
+    for (const c of customers) {
+      const cvehicles = vehiclesByUser[String(c._id)] || [];
+      if (cvehicles.length === 0) {
+        results.push({ customer: c, vehicle: null });
+      } else {
+        for (const v of cvehicles) {
+          results.push({ customer: c, vehicle: v });
+        }
+      }
+    }
+
+    return sendSuccess(res, 200, "Vehicles found.", {
+      results: results.slice(0, 50),
+    });
+  }
+
+  const rx = new RegExp(escapeRegex(query), "i");
+
+  const [vehiclesByReg, customersByName] = await Promise.all([
+    Vehicle.find({
+      user: { $in: garageCustomerIds },
+      vehicleRegisterNo: rx,
+    })
+      .select(
+        "_id vehicleBrand vehicleModel vehicleVariant vehicleRegisterNo user",
+      )
+      .limit(20)
+      .lean(),
+    User.find({
+      _id: { $in: garageCustomerIds },
+      $or: [{ fullName: rx }, { phoneNo: rx }],
+    })
+      .select("_id fullName phoneNo emailId")
+      .limit(15)
+      .lean(),
+  ]);
+
+  const customerIdSet = new Set(customersByName.map((c) => String(c._id)));
+  for (const v of vehiclesByReg) {
+    if (v.user) customerIdSet.add(String(v.user));
+  }
+
+  if (customerIdSet.size === 0) {
+    return sendSuccess(res, 200, "Vehicles found.", { results: [] });
+  }
+
+  const allIds = [...customerIdSet];
+  const [allCustomers, allVehicles] = await Promise.all([
+    User.find({ _id: { $in: allIds } })
+      .select("_id fullName phoneNo emailId")
+      .lean(),
+    Vehicle.find({ user: { $in: allIds } })
+      .select(
+        "_id vehicleBrand vehicleModel vehicleVariant vehicleRegisterNo user",
+      )
+      .lean(),
+  ]);
+
+  const customerMap = {};
+  allCustomers.forEach((c) => {
+    customerMap[String(c._id)] = c;
+  });
+
+  const vehiclesByUser = {};
+  allVehicles.forEach((v) => {
+    const uid = String(v.user);
+    if (!vehiclesByUser[uid]) vehiclesByUser[uid] = [];
+    vehiclesByUser[uid].push(v);
+  });
+
+  const results = [];
+  for (const cid of allIds) {
+    const customer = customerMap[cid];
+    if (!customer) continue;
+    const cvehicles = vehiclesByUser[cid] || [];
+    if (cvehicles.length === 0) {
+      results.push({ customer, vehicle: null });
+    } else {
+      for (const v of cvehicles) {
+        results.push({ customer, vehicle: v });
+      }
+    }
+  }
+
+  return sendSuccess(res, 200, "Vehicles found.", {
+    results: results.slice(0, 30),
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────
@@ -233,11 +350,6 @@ const createRepairOrder = asyncHandler(async (req, res) => {
     parts = [],
     applyDiscountToAllParts = false,
     images = [],
-    laborTotal = 0,
-    partsTotal = 0,
-    taxTotal = 0,
-    totalAmount = 0,
-    discountAmount = 0,
     tags = [],
     customerRemarks = [],
     scheduledAt,
@@ -248,26 +360,34 @@ const createRepairOrder = asyncHandler(async (req, res) => {
   if (!customerId) return sendError(res, 400, "customerId is required.");
   if (!vehicleId) return sendError(res, 400, "vehicleId is required.");
 
+  const { services: syncedServices, parts: syncedParts } =
+    await syncManualRepairOrderItems(garageId, services, parts);
+  const normalizedServices = normalizeRepairServiceLines(syncedServices);
+  const normalizedParts = normalizeRepairPartLines(syncedParts);
+  const totals = computeRepairOrderTotals(normalizedServices, normalizedParts);
+
   const payload = {
     garageId,
     customerId,
     vehicleId,
     odometerReading: odometerReading ?? null,
     vehicleVariant: vehicleVariant ?? null,
-    services,
+    services: normalizedServices,
     applyDiscountToAllServices,
-    parts,
+    parts: normalizedParts,
     applyDiscountToAllParts,
     images,
-    laborTotal: Number(laborTotal) || 0,
-    partsTotal: Number(partsTotal) || 0,
-    taxTotal: Number(taxTotal) || 0,
-    totalAmount: Number(totalAmount) || 0,
-    discountAmount: Number(discountAmount) || 0,
+    laborTotal: totals.laborTotal,
+    partsTotal: totals.partsTotal,
+    taxTotal: totals.taxTotal,
+    totalAmount: totals.totalAmount,
+    discountAmount: totals.discountAmount,
     tags,
     customerRemarks,
     scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
-    estimatedDeliveryAt: estimatedDeliveryAt ? new Date(estimatedDeliveryAt) : null,
+    estimatedDeliveryAt: estimatedDeliveryAt
+      ? new Date(estimatedDeliveryAt)
+      : null,
     notifyCustomer,
     createdBy: req.user._id,
     status: "created",
@@ -287,12 +407,17 @@ const createRepairOrder = asyncHandler(async (req, res) => {
     }
   }
 
+  // Legacy no-op retained for compatibility with older usage hooks.
+  incrementUsage(garageId, "repairOrders");
+
   // Fire-and-forget: notify customer + garage owner
   if (customerId) {
     (async () => {
       try {
         const garage = await Garage.findById(garageId).select("owner").lean();
-        const customer = await User.findById(customerId).select("fullName").lean();
+        const customer = await User.findById(customerId)
+          .select("fullName")
+          .lean();
         await notifyBoth(
           customerId,
           garage?.owner,
@@ -328,28 +453,57 @@ const updateRepairOrder = asyncHandler(async (req, res) => {
     "parts",
     "applyDiscountToAllParts",
     "images",
-    "laborTotal",
-    "partsTotal",
-    "taxTotal",
-    "totalAmount",
-    "discountAmount",
     "tags",
     "customerRemarks",
-    "scheduledAt",         // advance booking date — editable by owner
+    "scheduledAt", // advance booking date — editable by owner
     "estimatedDeliveryAt",
     "notifyCustomer",
     "status",
     "odometerReading",
     "vehicleVariant",
-    "assignedTo",          // owner assigns a mechanic (member)
+    "assignedTo", // owner assigns a mechanic (member)
     "assignedAt",
   ];
 
   const previousStatus = order.status;
 
   allowed.forEach((k) => {
-    if (req.body[k] !== undefined) order[k] = req.body[k];
+    if (req.body[k] === undefined) return;
+    if (k === "services" || k === "parts") return;
+    order[k] = req.body[k];
   });
+
+  if (req.body.services !== undefined || req.body.parts !== undefined) {
+    const rawServices =
+      req.body.services !== undefined
+        ? req.body.services
+        : (order.services || []).map((l) =>
+            typeof l?.toObject === "function" ? l.toObject() : { ...l },
+          );
+    const rawParts =
+      req.body.parts !== undefined
+        ? req.body.parts
+        : (order.parts || []).map((l) =>
+            typeof l?.toObject === "function" ? l.toObject() : { ...l },
+          );
+
+    const { services: syncedServices, parts: syncedParts } =
+      await syncManualRepairOrderItems(garageId, rawServices, rawParts);
+    const normalizedServices = normalizeRepairServiceLines(syncedServices);
+    const normalizedParts = normalizeRepairPartLines(syncedParts);
+    const totals = computeRepairOrderTotals(
+      normalizedServices,
+      normalizedParts,
+    );
+
+    order.services = normalizedServices;
+    order.parts = normalizedParts;
+    order.laborTotal = totals.laborTotal;
+    order.partsTotal = totals.partsTotal;
+    order.taxTotal = totals.taxTotal;
+    order.totalAmount = totals.totalAmount;
+    order.discountAmount = totals.discountAmount;
+  }
 
   await order.save();
 
@@ -365,16 +519,18 @@ const updateRepairOrder = asyncHandler(async (req, res) => {
       try {
         // One query to get garage (owner + prefs + name) and customer in parallel
         const [garage, customer] = await Promise.all([
-          Garage.findById(garageId).select("owner preferences garageName").lean(),
+          Garage.findById(garageId)
+            .select("owner preferences garageName")
+            .lean(),
           order.customerId
             ? User.findById(order.customerId).select("fullName phoneNo").lean()
             : null,
         ]);
 
-        const ownerId   = garage?.owner;
-        const gName     = garage?.garageName ?? "your garage";
-        const cName     = customer?.fullName || "Customer";
-        const orderNo   = order.orderNo;
+        const ownerId = garage?.owner;
+        const gName = garage?.garageName ?? "your garage";
+        const cName = customer?.fullName || "Customer";
+        const orderNo = order.orderNo;
 
         // ── in_progress ──────────────────────────────────────────────
         if (req.body.status === "in_progress") {
@@ -417,7 +573,10 @@ const updateRepairOrder = asyncHandler(async (req, res) => {
           );
         }
       } catch (err) {
-        console.error("[Push] Status transition notification failed:", err.message);
+        console.error(
+          "[Push] Status transition notification failed:",
+          err.message,
+        );
       }
     })();
   }
@@ -435,7 +594,7 @@ const deleteRepairOrder = asyncHandler(async (req, res) => {
   const order = await RepairOrder.findOneAndUpdate(
     { _id: req.params.id, garageId, isDeleted: false },
     { isDeleted: true },
-    { new: true },
+    { returnDocument: "after" },
   );
 
   if (!order) return sendError(res, 404, "Repair order not found.");
@@ -450,7 +609,7 @@ const getCancelledOrders = asyncHandler(async (req, res) => {
   if (!garageId) return sendError(res, 404, "Garage not found.");
 
   const { page = 1, limit = 20, dateFrom, dateTo, search } = req.query;
-  const safePage  = Math.max(Number(page) || 1, 1);
+  const safePage = Math.max(Number(page) || 1, 1);
   const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 100);
   const skip = (safePage - 1) * safeLimit;
 
@@ -459,13 +618,23 @@ const getCancelledOrders = asyncHandler(async (req, res) => {
   if (dateFrom || dateTo) {
     filter.createdAt = {};
     if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
-    if (dateTo)   filter.createdAt.$lte = new Date(new Date(dateTo).setHours(23, 59, 59, 999));
+    if (dateTo)
+      filter.createdAt.$lte = new Date(
+        new Date(dateTo).setHours(23, 59, 59, 999),
+      );
   }
 
   if (search?.trim()) {
     const rx = new RegExp(escapeRegex(search.trim()), "i");
-    const matchingCustomers = await User.find({ $or: [{ fullName: rx }, { phoneNo: rx }] }).select("_id").lean();
-    filter.$or = [{ orderNo: rx }, { customerId: { $in: matchingCustomers.map(c => c._id) } }];
+    const matchingCustomers = await User.find({
+      $or: [{ fullName: rx }, { phoneNo: rx }],
+    })
+      .select("_id")
+      .lean();
+    filter.$or = [
+      { orderNo: rx },
+      { customerId: { $in: matchingCustomers.map((c) => c._id) } },
+    ];
   }
 
   const [orders, total] = await Promise.all([
@@ -479,7 +648,11 @@ const getCancelledOrders = asyncHandler(async (req, res) => {
     RepairOrder.countDocuments(filter),
   ]);
 
-  return sendSuccess(res, 200, "Cancelled orders fetched.", { orders, total, page: safePage });
+  return sendSuccess(res, 200, "Cancelled orders fetched.", {
+    orders,
+    total,
+    page: safePage,
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────
@@ -491,7 +664,8 @@ const tallyExport = asyncHandler(async (req, res) => {
   if (!garageId) return sendError(res, 404, "Garage not found.");
 
   const { dateFrom, dateTo } = req.query;
-  if (!dateFrom || !dateTo) return sendError(res, 400, "dateFrom and dateTo are required.");
+  if (!dateFrom || !dateTo)
+    return sendError(res, 400, "dateFrom and dateTo are required.");
 
   const filter = {
     garageId,
@@ -509,23 +683,30 @@ const tallyExport = asyncHandler(async (req, res) => {
     .sort({ createdAt: 1 })
     .lean();
 
-  const rows = orders.map(o => ({
-    orderNo:         o.orderNo ?? "",
-    date:            o.createdAt ? new Date(o.createdAt).toLocaleDateString("en-IN") : "",
-    customerName:    o.customerId?.fullName ?? "",
-    customerPhone:   o.customerId?.phoneNo ?? "",
-    vehicleRegNo:    o.vehicleId?.vehicleRegisterNo ?? "",
-    vehicle:         o.vehicleId ? `${o.vehicleId.vehicleBrand ?? ""} ${o.vehicleId.vehicleModel ?? ""}`.trim() : "",
-    status:          o.status ?? "",
-    labourTotal:     o.laborTotal ?? 0,
-    partsTotal:      o.partsTotal ?? 0,
-    discountAmount:  o.discountAmount ?? 0,
-    taxTotal:        o.taxTotal ?? 0,
-    totalAmount:     o.totalAmount ?? 0,
-    paymentMode:     o.paymentMode ?? "cash",
+  const rows = orders.map((o) => ({
+    orderNo: o.orderNo ?? "",
+    date: o.createdAt ? new Date(o.createdAt).toLocaleDateString("en-IN") : "",
+    customerName: o.customerId?.fullName ?? "",
+    customerPhone: o.customerId?.phoneNo ?? "",
+    vehicleRegNo: o.vehicleId?.vehicleRegisterNo ?? "",
+    vehicle: o.vehicleId
+      ? `${o.vehicleId.vehicleBrand ?? ""} ${o.vehicleId.vehicleModel ?? ""}`.trim()
+      : "",
+    status: o.status ?? "",
+    labourTotal: o.laborTotal ?? 0,
+    partsTotal: o.partsTotal ?? 0,
+    discountAmount: o.discountAmount ?? 0,
+    taxTotal: o.taxTotal ?? 0,
+    totalAmount: o.totalAmount ?? 0,
+    paymentMode: o.paymentMode ?? "cash",
   }));
 
-  return sendSuccess(res, 200, "Tally export data.", { rows, total: rows.length, dateFrom, dateTo });
+  return sendSuccess(res, 200, "Tally export data.", {
+    rows,
+    total: rows.length,
+    dateFrom,
+    dateTo,
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────
@@ -558,10 +739,14 @@ const getCalendarOrders = asyncHandler(async (req, res) => {
 
   const { dateFrom, dateTo } = req.query;
   if (!dateFrom || !dateTo)
-    return sendError(res, 400, "dateFrom and dateTo query params are required.");
+    return sendError(
+      res,
+      400,
+      "dateFrom and dateTo query params are required.",
+    );
 
   const start = new Date(dateFrom);
-  const end   = new Date(dateTo);
+  const end = new Date(dateTo);
   end.setHours(23, 59, 59, 999);
 
   if (isNaN(start) || isNaN(end))
@@ -585,6 +770,175 @@ const getCalendarOrders = asyncHandler(async (req, res) => {
 
   return sendSuccess(res, 200, "Calendar orders fetched.", { orders });
 });
+
+function normalizeManualText(value) {
+  return String(value ?? "").trim();
+}
+
+function isManualServiceLine(line) {
+  const mode = String(line?.entryMode || line?.mode || "").toLowerCase();
+  if (mode === "manual") return true;
+  if (mode === "catalog") return false;
+  return !(
+    line?.catalogId ||
+    line?.serviceId ||
+    line?.service?._id ||
+    line?.service?.id
+  );
+}
+
+function isManualPartLine(line) {
+  const mode = String(line?.entryMode || line?.mode || "").toLowerCase();
+  if (mode === "manual") return true;
+  if (mode === "catalog") return false;
+  return !(
+    line?.inventoryId ||
+    line?.itemId ||
+    line?.part?._id ||
+    line?.part?.id
+  );
+}
+
+async function syncManualRepairOrderItems(garageId, services = [], parts = []) {
+  const syncedServices = await Promise.all(
+    (Array.isArray(services) ? services : []).map(async (line) => {
+      const existingId =
+        line?.catalogId ||
+        line?.serviceId ||
+        line?.service?._id ||
+        line?.service?.id;
+      const manual = isManualServiceLine(line);
+
+      if (!manual || existingId) {
+        return line;
+      }
+
+      const name = normalizeManualText(
+        line?.name || line?.serviceName || line?.title,
+      );
+      if (!name) return line;
+
+      const serviceRx = new RegExp(`^${escapeRegex(name)}$`, "i");
+      let service = await GarageServiceCatalog.findOne({
+        garageId,
+        isDeleted: false,
+        name: serviceRx,
+      })
+        .select("_id name mrp")
+        .lean();
+
+      if (!service) {
+        const price =
+          Number(line?.price ?? line?.mrp ?? line?.lineTotal ?? 0) || 0;
+        service = await GarageServiceCatalog.create({
+          garageId,
+          name,
+          category: "Other",
+          mrp: price,
+          applicability: "generic",
+          applicableBrands: [],
+          applicableModels: [],
+          isActive: true,
+        });
+        service = service.toObject();
+      }
+
+      return {
+        ...line,
+        entryMode: "manual",
+        catalogId: service._id,
+        name: service.name,
+        price: Number(line?.price ?? service.mrp ?? 0) || 0,
+      };
+    }),
+  );
+
+  const syncedParts = await Promise.all(
+    (Array.isArray(parts) ? parts : []).map(async (line) => {
+      const existingId =
+        line?.inventoryId ||
+        line?.itemId ||
+        line?.part?._id ||
+        line?.part?.id;
+      const manual = isManualPartLine(line);
+
+      if (!manual || existingId) {
+        return line;
+      }
+
+      const name = normalizeManualText(
+        line?.name || line?.partName || line?.title,
+      );
+      if (!name) return line;
+
+      const partCode = normalizeManualText(
+        line?.partCode || line?.code || line?.no,
+      );
+
+      const lookup = partCode
+        ? {
+            garageId,
+            $or: [
+              { partCode: new RegExp(`^${escapeRegex(partCode)}$`, "i") },
+              { partName: new RegExp(`^${escapeRegex(name)}$`, "i") },
+            ],
+          }
+        : {
+            garageId,
+            partName: new RegExp(`^${escapeRegex(name)}$`, "i"),
+          };
+
+      let part = await Inventory.findOne(lookup)
+        .select("_id partName partCode sellingPrice manageInventory")
+        .lean();
+
+      if (!part) {
+        const unitPrice =
+          Number(
+            line?.unitPrice ??
+              line?.price ??
+              line?.mrp ??
+              line?.sellingPrice ??
+              0,
+          ) || 0;
+
+        part = await Inventory.create({
+          garageId,
+          partName: name,
+          partCode: partCode || null,
+          category: "general",
+          brand: null,
+          manufacturer: null,
+          unit: "pcs",
+          description: null,
+          quantityInHand: 0,
+          minimumStockLevel: 5,
+          purchasePrice: 0,
+          sellingPrice: unitPrice,
+          taxPercent: Number(line?.taxPercent ?? 0) || 0,
+          manageInventory: false,
+          applicability: "generic",
+          applicableBrands: [],
+          applicableModels: [],
+          isActive: true,
+        });
+        part = part.toObject();
+      }
+
+      return {
+        ...line,
+        entryMode: "manual",
+        inventoryId: part._id,
+        partCode: line?.partCode ?? part.partCode ?? null,
+        name: part.partName,
+        unitPrice:
+          Number(line?.unitPrice ?? line?.price ?? part.sellingPrice ?? 0) || 0,
+      };
+    }),
+  );
+
+  return { services: syncedServices, parts: syncedParts };
+}
 
 module.exports = {
   searchCustomers,

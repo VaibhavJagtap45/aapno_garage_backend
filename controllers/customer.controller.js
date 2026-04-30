@@ -353,7 +353,7 @@ const updateMyProfile = asyncHandler(async (req, res) => {
   const user = await User.findByIdAndUpdate(
     req.user._id,
     { $set: update },
-    { new: true, runValidators: true },
+    { returnDocument: "after", runValidators: true },
   )
     .select("-otp -refreshToken")
     .lean();

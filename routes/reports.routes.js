@@ -1,6 +1,8 @@
 const express = require("express");
 const router  = express.Router();
 const protect = require("../middlewares/auth");
+const checkSubscription = require("../middlewares/checkSubscription");
+const checkFeature = require("../middlewares/checkFeature");
 const {
   accountsPayable,
   stockInReport,
@@ -10,7 +12,7 @@ const {
   gstReport,
 } = require("../controllers/Reports.controller");
 
-router.use(protect);
+router.use(protect, checkSubscription, checkFeature("all_reports"));
 
 router.get("/accounts-payable", accountsPayable);
 router.get("/stock-in",         stockInReport);

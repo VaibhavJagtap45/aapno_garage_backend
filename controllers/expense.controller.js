@@ -2,6 +2,7 @@ const Expense = require("../models/Expense.model");
 const asyncHandler = require("../utils/asyncHandler");
 const { sendSuccess, sendError } = require("../utils/response.utils");
 const resolveGarageId = require("../utils/resolveGarageId");
+const { resolveFranchiseAccountsScope, garageFilter } = require("../utils/resolveFranchiseAccountsScope");
 
 function buildDateFilter(dateFrom, dateTo) {
   if (!dateFrom && !dateTo) return {};
@@ -11,33 +12,38 @@ function buildDateFilter(dateFrom, dateTo) {
   return { date: f };
 }
 
-// GET /api/v1/expenses?dateFrom=&dateTo=&page=&limit=
 const listExpenses = asyncHandler(async (req, res) => {
-  const garageId = await resolveGarageId(req.user);
-  if (!garageId) return sendError(res, 404, "Garage not found.");
+  const scope = await resolveFranchiseAccountsScope(req.user, req.query.branch);
+  if (!scope) return sendError(res, 404, "Garage not found.");
 
   const { dateFrom, dateTo, page = 1, limit = 100 } = req.query;
   const safePage  = Math.max(Number(page)  || 1, 1);
   const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
   const skip = (safePage - 1) * safeLimit;
 
-  const filter = { garageId, isDeleted: false, ...buildDateFilter(dateFrom, dateTo) };
+  const filter = { garageId: garageFilter(scope), isDeleted: false, ...buildDateFilter(dateFrom, dateTo) };
 
   const [expenses, total] = await Promise.all([
-    Expense.find(filter).sort({ date: -1 }).skip(skip).limit(safeLimit).lean(),
+    Expense.find(filter)
+      .populate("garageId", "garageName")
+      .sort({ date: -1 }).skip(skip).limit(safeLimit).lean(),
     Expense.countDocuments(filter),
   ]);
 
-  return sendSuccess(res, 200, "Expenses fetched.", { expenses, total, page: safePage });
+  return sendSuccess(res, 200, "Expenses fetched.", {
+    expenses, total, page: safePage,
+    isFranchiseView: scope.isFranchiseView,
+    isPrimaryBranch: scope.isPrimaryBranch,
+    branches: scope.isPrimaryBranch ? scope.branches : undefined,
+  });
 });
 
-// GET /api/v1/expenses/stats?dateFrom=&dateTo=
 const getExpenseStats = asyncHandler(async (req, res) => {
-  const garageId = await resolveGarageId(req.user);
-  if (!garageId) return sendError(res, 404, "Garage not found.");
+  const scope = await resolveFranchiseAccountsScope(req.user, req.query.branch);
+  if (!scope) return sendError(res, 404, "Garage not found.");
 
   const { dateFrom, dateTo } = req.query;
-  const filter = { garageId, isDeleted: false, ...buildDateFilter(dateFrom, dateTo) };
+  const filter = { garageId: garageFilter(scope), isDeleted: false, ...buildDateFilter(dateFrom, dateTo) };
 
   const [result] = await Expense.aggregate([
     { $match: filter },

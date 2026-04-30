@@ -1,5 +1,7 @@
 const router = require("express").Router();
 const protect = require("../middlewares/auth");
+const checkSubscription = require("../middlewares/checkSubscription");
+const checkFeature = require("../middlewares/checkFeature");
 const {
   listServiceReminders,
   createServiceReminder,
@@ -7,7 +9,7 @@ const {
   deleteServiceReminder,
 } = require("../controllers/serviceReminder.controller");
 
-router.use(protect);
+router.use(protect, checkSubscription, checkFeature("service_reminders"));
 
 // GET  /api/v1/service-reminders?tab=due|overdue|done
 router.get("/", listServiceReminders);

@@ -1,6 +1,8 @@
 const XLSX = require("xlsx");
 const GarageServiceCatalog = require("../models/GarageServiceCatalog.model");
 const Inventory = require("../models/Inventry.model");
+const Garage = require("../models/Garage.model");
+const Franchise = require("../models/Franchise.model");
 const asyncHandler = require("../utils/asyncHandler");
 const { sendError, sendSuccess } = require("../utils/response.utils");
 const resolveGarageId = require("../utils/resolveGarageId");
@@ -164,6 +166,18 @@ const listCatalogItems = asyncHandler(async (req, res) => {
 
   // ── SERVICES ────────────────────────────────────────────────────
   const query = { garageId, isDeleted: false };
+  const currentGarage = await Garage.findById(garageId).select("franchiseId").lean();
+  if (currentGarage?.franchiseId) {
+    const franchise = await Franchise.findById(currentGarage.franchiseId)
+      .select("sharingPolicy.shareServices")
+      .lean();
+    if (franchise?.sharingPolicy?.shareServices) {
+      const garageIds = await Garage.distinct("_id", {
+        franchiseId: currentGarage.franchiseId,
+      });
+      query.garageId = { $in: garageIds };
+    }
+  }
   const andConditions = [
     buildApplicabilityQuery({
       brand: normalizeText(brand),
@@ -215,10 +229,21 @@ const listCategories = asyncHandler(async (req, res) => {
       isActive: true,
     });
   } else {
-    categories = await GarageServiceCatalog.distinct("category", {
-      garageId,
-      isDeleted: false,
-    });
+    const serviceFilter = { garageId, isDeleted: false };
+    const currentGarage = await Garage.findById(garageId).select("franchiseId").lean();
+    if (currentGarage?.franchiseId) {
+      const franchise = await Franchise.findById(currentGarage.franchiseId)
+        .select("sharingPolicy.shareServices")
+        .lean();
+      if (franchise?.sharingPolicy?.shareServices) {
+        const garageIds = await Garage.distinct("_id", {
+          franchiseId: currentGarage.franchiseId,
+        });
+        serviceFilter.garageId = { $in: garageIds };
+      }
+    }
+
+    categories = await GarageServiceCatalog.distinct("category", serviceFilter);
   }
 
   return sendSuccess(res, 200, "Categories fetched.", {
@@ -411,7 +436,7 @@ const updateCatalogItem = asyncHandler(async (req, res) => {
     const item = await Inventory.findOneAndUpdate(
       { _id: req.params.id, garageId, isActive: true },
       { $set: update },
-      { new: true, runValidators: true },
+      { returnDocument: "after", runValidators: true },
     ).lean();
 
     if (!item) return sendError(res, 404, "Part not found.");
@@ -460,7 +485,7 @@ const updateCatalogItem = asyncHandler(async (req, res) => {
   const item = await GarageServiceCatalog.findOneAndUpdate(
     { _id: req.params.id, garageId, isDeleted: false },
     { $set: update },
-    { new: true, runValidators: true },
+    { returnDocument: "after", runValidators: true },
   ).lean();
 
   if (!item) return sendError(res, 404, "Service not found.");
@@ -486,7 +511,7 @@ const deleteCatalogItem = asyncHandler(async (req, res) => {
     const item = await Inventory.findOneAndUpdate(
       { _id: req.params.id, garageId },
       { isActive: false },
-      { new: true },
+      { returnDocument: "after" },
     );
     if (!item) return sendError(res, 404, "Part not found.");
     return sendSuccess(res, 200, "Part deleted successfully.");
@@ -495,7 +520,7 @@ const deleteCatalogItem = asyncHandler(async (req, res) => {
   const item = await GarageServiceCatalog.findOneAndUpdate(
     { _id: req.params.id, garageId, isDeleted: false },
     { isDeleted: true },
-    { new: true },
+    { returnDocument: "after" },
   );
   if (!item) return sendError(res, 404, "Service not found.");
   return sendSuccess(res, 200, "Service deleted successfully.");

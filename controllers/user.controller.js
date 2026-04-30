@@ -143,13 +143,15 @@ const DEFAULT_PASSWORD = "Aapnogarage123";
 const getProfile = asyncHandler(async (req, res) => {
   const user = req.user; // already attached & sanitised by `protect` middleware
 
-  // Owner — enrich response with garage details
-  if (user.role === "owner") {
+  // Owner / Manager — enrich response with garage details
+  if (user.role === "owner" || user.role === "manager") {
     const garage = await Garage.findOne({ owner: user._id }).lean();
+    const resolvedGarage =
+      garage || (user.garage ? await Garage.findById(user.garage).lean() : null);
 
     return sendSuccess(res, 200, "Profile fetched successfully", {
       user,
-      garage: garage ?? null,
+      garage: resolvedGarage ?? null,
     });
   }
 

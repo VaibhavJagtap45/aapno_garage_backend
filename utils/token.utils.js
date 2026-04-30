@@ -4,7 +4,8 @@ const crypto = require("crypto");
 const User = require("../models/User.model");
 
 // ─── Constants ────────────────────────────────────────────────────
-const ACCESS_TOKEN_EXPIRY    = "15m";
+const ACCESS_TOKEN_EXPIRY    = "4h";
+const ACCESS_TOKEN_EXPIRY_MS = 4 * 60 * 60 * 1000;
 const REFRESH_TOKEN_EXPIRY   = "7d";
 const REFRESH_TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -25,6 +26,11 @@ const signRefreshToken = (user) =>
   jwt.sign({ sub: user._id }, process.env.JWT_REFRESH_SECRET, {
     expiresIn: REFRESH_TOKEN_EXPIRY,
   });
+
+const getTokenExpiryDate = (token) => {
+  const decoded = jwt.decode(token);
+  return decoded?.exp ? new Date(decoded.exp * 1000) : null;
+};
 
 // ─── Verify Access Token ──────────────────────────────────────────
 const verifyAccessToken = (token) => {
@@ -144,8 +150,11 @@ const revokeRefreshToken = async (userId) => {
 };
 
 module.exports = {
+  ACCESS_TOKEN_EXPIRY,
+  ACCESS_TOKEN_EXPIRY_MS,
   signAccessToken,
   signRefreshToken,
+  getTokenExpiryDate,
   verifyAccessToken,
   verifyRefreshToken,
   generateAndSaveRefreshToken,

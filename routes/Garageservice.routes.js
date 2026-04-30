@@ -24,8 +24,11 @@ const upload = multer({
   },
 });
 
-// All routes require authentication
-router.use(protect);
+const checkSubscription = require("../middlewares/checkSubscription");
+const checkFeature = require("../middlewares/checkFeature");
+
+// All routes require authentication.
+router.use(protect, checkSubscription);
 
 // ── Service Catalog CRUD ──────────────────────────────────────────
 
@@ -38,8 +41,8 @@ router.get("/categories", getCategories);
 // POST /api/v1/garage-services
 router.post("/", addService);
 
-// POST /api/v1/garage-services/bulk-csv  (multipart, field: "file")
-router.post("/bulk-csv", upload.single("file"), bulkImportCsv);
+// POST /api/v1/garage-services/bulk-csv  (multipart, field: "file") (feature-gated)
+router.post("/bulk-csv", checkFeature("bulk_upload"), upload.single("file"), bulkImportCsv);
 
 // PUT  /api/v1/garage-services/:id
 router.put("/:id", updateService);

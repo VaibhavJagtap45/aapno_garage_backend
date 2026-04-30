@@ -1,5 +1,7 @@
 const router = require("express").Router();
 const protect = require("../middlewares/auth");
+const checkSubscription = require("../middlewares/checkSubscription");
+const checkQuota = require("../middlewares/checkQuota");
 const {
   listInvoices,
   getInvoice,
@@ -9,7 +11,7 @@ const {
   getInvoiceStats,
 } = require("../controllers/invoice.controller");
 
-router.use(protect);
+router.use(protect, checkSubscription);
 
 // GET  /api/v1/invoices/stats?dateFrom=&dateTo=
 router.get("/stats", getInvoiceStats);
@@ -20,8 +22,8 @@ router.get("/", listInvoices);
 // GET  /api/v1/invoices/:id
 router.get("/:id", getInvoice);
 
-// POST /api/v1/invoices
-router.post("/", createInvoice);
+// POST /api/v1/invoices  (quota-gated)
+router.post("/", checkQuota("invoices"), createInvoice);
 
 // PUT  /api/v1/invoices/:id
 router.put("/:id", updateInvoice);

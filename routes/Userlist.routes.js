@@ -68,13 +68,14 @@
 
 const router = require("express").Router();
 const protect = require("../middlewares/auth");
+const checkSubscription = require("../middlewares/checkSubscription");
 const {
   getUsersByRole,
   getUserDetail,
   deleteUser,
 } = require("../controllers/Userlist.controller");
 
-router.use(protect);
+router.use(protect, checkSubscription);
 
 // ── Customers ─────────────────────────────────────────────────────
 router.get(

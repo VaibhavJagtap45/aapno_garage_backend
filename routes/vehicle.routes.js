@@ -1,41 +1,3 @@
-// const router = require("express").Router();
-// const protect = require("../middlewares/auth");
-// const {
-//   addVehicle,
-//   getVehiclesByUser,
-//   getVehicleById,
-// } = require("../controllers/vehicle.controller"); // separate controller
-
-// // POST /api/v1/vehicle/add  — add vehicle to existing customer
-// router.post("/add", addVehicle);
-
-// // GET /api/v1/vehicle/customer/:customerId  — all vehicles of a customer
-// router.get("/customer/:customerId", getVehiclesByUser);
-
-// // GET /api/v1/vehicle/:vehicleId
-// router.get("/:vehicleId", getVehicleById);
-
-// // ── All routes require authentication ─────────────────────────────
-// router.use(protect);
-
-// // ─────────────────────────────────────────────────────────────────
-// //  POST /api/v1/vehicle/brand ->  Body: { brand: "Honda", models: ["Activa", "Shine"] }
-// router.post("/brand", addBrand);
-
-// // ─────────────────────────────────────────────────────────────────
-// //  POST /api/v1/vehicle/model->  Body: { brand: "Honda", model: "CB300R" }
-// router.post("/model", addModel);
-
-// // ─────────────────────────────────────────────────────────────────
-// //  GET /api/v1/vehicle-meta/brands->   Returns all brands list
-// router.get("/brands", getMetaBrands);
-
-// // ─────────────────────────────────────────────────────────────────
-// //  GET /api/v1/vehicle/models?brand=Honda
-// router.get("/models", getMetaModelsByBrand);
-
-// module.exports = router;
-
 const router = require("express").Router();
 const protect = require("../middlewares/auth");
 
@@ -49,6 +11,7 @@ const {
 
 // Vehicle meta (brands/models master list for dropdowns)
 const {
+  bulkUpsertMeta,
   addBrand,
   addModel,
   getMetaBrands,
@@ -62,16 +25,23 @@ router.use(protect);
 //  Vehicle Meta routes — MUST be before /:vehicleId wildcard
 // ─────────────────────────────────────────────────────────────────
 
-// POST /api/v1/vehicle/brand  Body: { brand: "Honda", models: ["Activa", "Shine"] }
+// POST /api/v1/vehicle/bulk
+//   Body : single object OR array of { type, brand, models[] }
+//   Use  : Postman seed upload — upserts brands and merges models
+router.post("/bulk", bulkUpsertMeta);
+
+// POST /api/v1/vehicle/brand
+//   Body : { type: "2W", brand: "Honda", models: ["Activa", "Shine"] }
 router.post("/brand", addBrand);
 
-// POST /api/v1/vehicle/model  Body: { brand: "Honda", model: "CB300R" }
+// POST /api/v1/vehicle/model
+//   Body : { type: "2W", brand: "Honda", model: "CB300R" }
 router.post("/model", addModel);
 
-// GET /api/v1/vehicle/brands — all brands list
+// GET /api/v1/vehicle/brands?type=2W  — all brands (optionally filtered)
 router.get("/brands", getMetaBrands);
 
-// GET /api/v1/vehicle/models?brand=Honda
+// GET /api/v1/vehicle/models?brand=Honda&type=2W
 router.get("/models", getMetaModelsByBrand);
 
 // ─────────────────────────────────────────────────────────────────

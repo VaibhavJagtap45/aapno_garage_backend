@@ -1,5 +1,6 @@
 const router = require("express").Router();
 const protect = require("../middlewares/auth");
+const checkSubscription = require("../middlewares/checkSubscription");
 const {
   listFeedbacks,
   getFeedbackStats,
@@ -7,7 +8,7 @@ const {
   deleteFeedback,
 } = require("../controllers/feedback.controller");
 
-router.use(protect);
+router.use(protect, checkSubscription);
 
 // GET  /api/v1/feedbacks/stats
 router.get("/stats", getFeedbackStats);

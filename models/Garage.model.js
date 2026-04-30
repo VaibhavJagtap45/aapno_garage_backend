@@ -3,11 +3,29 @@ const mongoose = require("mongoose");
 //  Garage Schema
 const GarageSchema = new mongoose.Schema(
   {
+    // One owner may have many garages (multi-branch model).
+    // Note: a partial index ensures lookup speed without uniqueness.
     owner: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      unique: true,
+      index: true,
+    },
+    isPrimaryBranch: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    franchiseId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Franchise",
+      default: null,
+      index: true,
+    },
+    manager: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
       index: true,
     },
 
@@ -98,6 +116,9 @@ const GarageSchema = new mongoose.Schema(
     timestamps: true,
   },
 );
+
+// Compound index for fast multi-branch listing
+GarageSchema.index({ owner: 1, createdAt: -1 });
 
 // ── Auto-clear GST number when not applicable ─────────────────────
 GarageSchema.pre("save", async function () {

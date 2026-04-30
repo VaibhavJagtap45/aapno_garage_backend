@@ -4,6 +4,7 @@ const Garage = require("../models/Garage.model");
 const asyncHandler = require("../utils/asyncHandler");
 const {
   signAccessToken,
+  getTokenExpiryDate,
   generateAndSaveRefreshToken,
   rotateRefreshToken,
   revokeRefreshToken,
@@ -118,6 +119,7 @@ const login = asyncHandler(async (req, res) => {
   }
 
   const accessToken = signAccessToken(user);
+  const accessTokenExpiresAt = getTokenExpiryDate(accessToken)?.toISOString() ?? null;
   const refreshToken = await generateAndSaveRefreshToken(user);
 
   res.cookie("refreshToken", refreshToken, REFRESH_COOKIE_OPTIONS);
@@ -126,6 +128,7 @@ const login = asyncHandler(async (req, res) => {
 
   return sendSuccess(res, 200, "Login successful", {
     accessToken,
+    accessTokenExpiresAt,
     user: user.toJSON(), // password stripped by toJSON()
     garage: garage ?? null,
     isProfileComplete: garage?.isProfileComplete ?? false,
@@ -190,7 +193,7 @@ const completeGarageProfile = asyncHandler(async (req, res) => {
       ...(emailId !== undefined && { emailId }),
       ...(state !== undefined && { state }),
     },
-    { new: true, runValidators: true },
+    { returnDocument: "after", runValidators: true },
   );
 
   const garagePayload = {
@@ -209,8 +212,13 @@ const completeGarageProfile = asyncHandler(async (req, res) => {
   const garage = await Garage.findOneAndUpdate(
     { owner: userId },
     { $set: garagePayload },
-    { upsert: true, new: true, runValidators: true },
+    { upsert: true, returnDocument: "after", runValidators: true },
   );
+
+  // Link garage to user if not already linked
+  if (!req.user.garage || req.user.garage.toString() !== garage._id.toString()) {
+    await User.findByIdAndUpdate(userId, { garage: garage._id });
+  }
 
   return sendSuccess(res, 200, "Garage profile completed", {
     user: updatedUser,
@@ -224,7 +232,10 @@ const completeGarageProfile = asyncHandler(async (req, res) => {
 const getMyGarage = asyncHandler(async (req, res) => {
   const garage = await Garage.findOne({ owner: req.user._id }).lean();
   if (!garage) return sendError(res, 404, "Garage not found.");
-  return sendSuccess(res, 200, "Garage fetched.", { garage });
+
+  return sendSuccess(res, 200, "Garage fetched.", {
+    garage,
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────
@@ -243,6 +254,8 @@ const refresh = asyncHandler(async (req, res) => {
 
   return sendSuccess(res, 200, "Token refreshed", {
     accessToken: result.accessToken,
+    accessTokenExpiresAt:
+      getTokenExpiryDate(result.accessToken)?.toISOString() ?? null,
   });
 });
 

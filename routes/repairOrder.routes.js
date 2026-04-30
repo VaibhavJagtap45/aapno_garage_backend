@@ -1,6 +1,8 @@
 // ─── repairOrder.routes.js ────────────────────────────────────────
 const router = require("express").Router();
 const protect = require("../middlewares/auth");
+const checkSubscription = require("../middlewares/checkSubscription");
+const checkQuota = require("../middlewares/checkQuota");
 const {
   searchCustomers,
   searchVehicleByRegNo,
@@ -15,7 +17,7 @@ const {
   getCalendarOrders,
 } = require("../controllers/RepairOrder.controller");
 
-router.use(protect);
+router.use(protect, checkSubscription);
 
 // GET  /api/v1/repair-orders/search-customers?q=John
 router.get("/search-customers", searchCustomers);
@@ -41,8 +43,8 @@ router.get("/", listRepairOrders);
 // GET  /api/v1/repair-orders/:id
 router.get("/:id", getRepairOrder);
 
-// POST /api/v1/repair-orders
-router.post("/", createRepairOrder);
+// POST /api/v1/repair-orders  (quota-gated)
+router.post("/", checkQuota("repairOrders"), createRepairOrder);
 
 // PUT  /api/v1/repair-orders/:id
 router.put("/:id", updateRepairOrder);

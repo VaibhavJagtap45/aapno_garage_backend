@@ -26,8 +26,10 @@ const CustomerRoutes = require("./routes/customer.routes");
 const MemberRoutes = require("./routes/member.routes");
 const AdminRoutes = require("./routes/admin.routes");
 const BookingRoutes = require("./routes/booking.routes");
-const GoogleCalendarRoutes = require("./routes/googleCalendar.routes");
 const ReportsRoutes = require("./routes/reports.routes");
+const FranchiseRoutes = require("./routes/franchise.routes");
+const InventoryTransferRoutes = require("./routes/inventoryTransfer.routes");
+const { stampFranchiseOnServices } = require("./utils/stampFranchiseOnServices");
 // const VehicleMetaRoutes = require("./routes/vehicleMeta.routes");
 const app = express(); //express js
 const PORT = process.env.PORT || 5000;
@@ -99,11 +101,9 @@ app.use(`/api/${API_VERSION}/expenses`, ExpenseRoutes);
 app.use(`/api/${API_VERSION}/customer`, CustomerRoutes);
 app.use(`/api/${API_VERSION}/member`, MemberRoutes);
 app.use(`/api/${API_VERSION}/bookings`, BookingRoutes);
-app.use(
-  `/api/${API_VERSION}/integrations/google-calendar`,
-  GoogleCalendarRoutes,
-);
 app.use(`/api/${API_VERSION}/reports`, ReportsRoutes);
+app.use(`/api/${API_VERSION}/franchises`, FranchiseRoutes);
+app.use(`/api/${API_VERSION}/inventory-transfers`, InventoryTransferRoutes);
 // ── 404 handler ────────────────────────────────────────────────────
 app.use((_req, res) =>
   res.status(404).json({ success: false, message: "Route not found." }),
@@ -112,6 +112,23 @@ app.use((_req, res) =>
 // ── Global error handler ────────────────────────────────────────────
 // eslint-disable-next-line no-unused-vars
 app.use((err, _req, res, _next) => {
+  if (err?.code === 11000) {
+    const field = Object.keys(err.keyPattern || {})[0];
+    const value = field ? err.keyValue?.[field] : undefined;
+    const message =
+      field && value !== undefined
+        ? `${field} '${value}' already exists.`
+        : "A record with the same unique value already exists.";
+
+    console.warn("Duplicate key error:", {
+      collection: err?.message?.match(/collection:\s+([^\s]+)/)?.[1] || null,
+      field,
+      value,
+    });
+
+    return res.status(409).json({ success: false, message });
+  }
+
   console.error(err.stack);
   res
     .status(err.status || 500)
@@ -120,11 +137,12 @@ app.use((err, _req, res, _next) => {
 
 // ── Bootstrap ──────────────────────────────────────────────────────
 connectDB()
-  .then(() =>
+  .then(async () => {
+    await stampFranchiseOnServices();
     app.listen(PORT, () =>
       console.log(`Server running on PORT ${PORT} [${process.env.NODE_ENV}]`),
-    ),
-  )
+    );
+  })
   .catch((err) => {
     console.error("DB connection failed:", err);
     process.exit(1);

@@ -90,8 +90,7 @@ const getOrders = asyncHandler(async (req, res) => {
 
   if (assignedToMe === "true") filter.assignedTo = req.user._id;
   if (status) {
-    filter.status =
-      status.includes(",") ? { $in: status.split(",") } : status;
+    filter.status = status.includes(",") ? { $in: status.split(",") } : status;
   }
 
   const safePage = Math.max(Number(page) || 1, 1);
@@ -113,7 +112,11 @@ const getOrders = asyncHandler(async (req, res) => {
     RepairOrder.countDocuments(filter),
   ]);
 
-  return sendSuccess(res, 200, "Orders fetched.", { orders, total, page: safePage });
+  return sendSuccess(res, 200, "Orders fetched.", {
+    orders,
+    total,
+    page: safePage,
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────
@@ -129,7 +132,10 @@ const getOrderDetail = asyncHandler(async (req, res) => {
     isDeleted: false,
   })
     .populate("customerId", "fullName phoneNo emailId")
-    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleVariant")
+    .populate(
+      "vehicleId",
+      "vehicleBrand vehicleModel vehicleRegisterNo vehicleVariant",
+    )
     .populate("assignedTo", "fullName phoneNo")
     .lean();
 
@@ -232,12 +238,69 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
 //  Replace the parts array on the order and recompute totals
 //  Body: { parts: [{ inventoryId?, partCode?, name, quantity, unitPrice, discount, taxPercent }] }
 // ─────────────────────────────────────────────────────────────────
+// const updateOrderParts = asyncHandler(async (req, res) => {
+//   const garageId = req.user.garage;
+//   const { parts } = req.body;
+
+//   if (!Array.isArray(parts))
+//     return sendError(res, 400, "parts must be an array.");
+
+//   const order = await RepairOrder.findOne({
+//     _id: req.params.id,
+//     garageId,
+//     isDeleted: false,
+//   });
+
+//   if (!order) return sendError(res, 404, "Order not found.");
+//   if (!["in_progress", "vehicle_ready"].includes(order.status)) {
+//     return sendError(
+//       res,
+//       400,
+//       "Parts can only be updated on in_progress or vehicle_ready orders.",
+//     );
+//   }
+
+//   const partLines = parts.map((p) => {
+//     const unitPrice = Math.max(Number(p.unitPrice) || 0, 0);
+//     const quantity = Math.max(Number(p.quantity) || 1, 1);
+//     const discount = Math.max(Number(p.discount) || 0, 0);
+//     const taxPercent = Math.max(Number(p.taxPercent) || 0, 0);
+//     const subtotal = unitPrice * quantity - discount;
+//     const lineTotal = Math.max(subtotal + (subtotal * taxPercent) / 100, 0);
+//     return {
+//       inventoryId: p.inventoryId || null,
+//       partCode: p.partCode || null,
+//       name: String(p.name || "Part"),
+//       quantity,
+//       unitPrice,
+//       discount,
+//       taxPercent,
+//       lineTotal,
+//     };
+//   });
+
+//   const partsTotal = partLines.reduce((s, p) => s + p.lineTotal, 0);
+//   const laborTotal = order.laborTotal || 0;
+//   const taxTotal = partLines.reduce((s, p) => {
+//     const sub = p.unitPrice * p.quantity - p.discount;
+//     return s + (sub * p.taxPercent) / 100;
+//   }, 0);
+
+//   order.parts = partLines;
+//   order.partsTotal = partsTotal;
+//   order.taxTotal = taxTotal;
+//   order.totalAmount = laborTotal + partsTotal;
+//   await order.save();
+
+//   return sendSuccess(res, 200, "Parts updated.", { order });
+// });
 const updateOrderParts = asyncHandler(async (req, res) => {
   const garageId = req.user.garage;
   const { parts } = req.body;
 
-  if (!Array.isArray(parts))
+  if (!Array.isArray(parts)) {
     return sendError(res, 400, "parts must be an array.");
+  }
 
   const order = await RepairOrder.findOne({
     _id: req.params.id,
@@ -254,24 +317,78 @@ const updateOrderParts = asyncHandler(async (req, res) => {
     );
   }
 
-  const partLines = parts.map((p) => {
-    const unitPrice = Math.max(Number(p.unitPrice) || 0, 0);
-    const quantity = Math.max(Number(p.quantity) || 1, 1);
-    const discount = Math.max(Number(p.discount) || 0, 0);
-    const taxPercent = Math.max(Number(p.taxPercent) || 0, 0);
-    const subtotal = unitPrice * quantity - discount;
-    const lineTotal = Math.max(subtotal + (subtotal * taxPercent) / 100, 0);
-    return {
-      inventoryId: p.inventoryId || null,
-      partCode: p.partCode || null,
-      name: String(p.name || "Part"),
-      quantity,
-      unitPrice,
-      discount,
-      taxPercent,
-      lineTotal,
-    };
-  });
+  const partLines = await Promise.all(
+    parts.map(async (p) => {
+      const unitPrice = Math.max(Number(p.unitPrice) || 0, 0);
+      const quantity = Math.max(Number(p.quantity) || 1, 1);
+      const discount = Math.max(Number(p.discount) || 0, 0);
+      const taxPercent = Math.max(Number(p.taxPercent) || 0, 0);
+
+      let inventoryId = p.inventoryId || null;
+      let partCode = p.partCode || null;
+      let name = String(p.name || "Part").trim();
+
+      const manual =
+        String(p.entryMode || "").toLowerCase() === "manual" || !inventoryId;
+
+      if (manual) {
+        const existing = await Inventory.findOne({
+          garageId,
+          $or: [
+            { partName: new RegExp(`^${escapeRegex(name)}$`, "i") },
+            ...(partCode
+              ? [{ partCode: new RegExp(`^${escapeRegex(partCode)}$`, "i") }]
+              : []),
+          ],
+        })
+          .select("_id partName partCode sellingPrice")
+          .lean();
+
+        let inventoryItem = existing;
+
+        if (!inventoryItem) {
+          inventoryItem = await Inventory.create({
+            garageId,
+            partName: name,
+            partCode: partCode ? String(partCode).trim().toUpperCase() : null,
+            category: "general",
+            brand: null,
+            manufacturer: null,
+            unit: "pcs",
+            description: null,
+            quantityInHand: 0,
+            minimumStockLevel: 5,
+            purchasePrice: 0,
+            sellingPrice: unitPrice,
+            taxPercent,
+            manageInventory: false,
+            applicability: "generic",
+            applicableBrands: [],
+            applicableModels: [],
+            isActive: true,
+          });
+        }
+
+        inventoryId = inventoryItem._id;
+        name = inventoryItem.partName;
+        partCode = inventoryItem.partCode || partCode;
+      }
+
+      const subtotal = unitPrice * quantity - discount;
+      const lineTotal = Math.max(subtotal + (subtotal * taxPercent) / 100, 0);
+
+      return {
+        inventoryId: inventoryId || null,
+        partCode: partCode || null,
+        name,
+        quantity,
+        unitPrice,
+        discount,
+        taxPercent,
+        lineTotal,
+      };
+    }),
+  );
 
   const partsTotal = partLines.reduce((s, p) => s + p.lineTotal, 0);
   const laborTotal = order.laborTotal || 0;
@@ -288,7 +405,6 @@ const updateOrderParts = asyncHandler(async (req, res) => {
 
   return sendSuccess(res, 200, "Parts updated.", { order });
 });
-
 // ─────────────────────────────────────────────────────────────────
 //  GET /api/v1/member/inventory?search=&category=&page=&limit=
 //  Read-only view of garage inventory (needed to add parts to orders)
@@ -355,7 +471,7 @@ const updateMyProfile = asyncHandler(async (req, res) => {
   const user = await User.findByIdAndUpdate(
     req.user._id,
     { $set: update },
-    { new: true, runValidators: true },
+    { returnDocument: "after", runValidators: true },
   )
     .select("-otp -refreshToken")
     .lean();

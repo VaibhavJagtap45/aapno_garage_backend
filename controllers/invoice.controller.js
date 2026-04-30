@@ -5,6 +5,11 @@ const Inventory = require("../models/Inventry.model");
 const asyncHandler = require("../utils/asyncHandler");
 const { sendSuccess, sendError } = require("../utils/response.utils");
 const escapeRegex = require("../utils/escapeRegex");
+const {
+  normalizeInvoiceServiceLines,
+  normalizeInvoicePartLines,
+  computeInvoiceTotals,
+} = require("../utils/lineItemMath");
 
 function clampAmount(value, max) {
   const amount = Number(value) || 0;
@@ -53,6 +58,8 @@ async function applyInventoryDelta(garageId, previousParts = [], nextParts = [])
 
 // ─── Helper ───────────────────────────────────────────────────────
 const resolveGarageId = require("../utils/resolveGarageId");
+const incrementUsage = require("../utils/incrementUsage");
+const { resolveFranchiseAccountsScope, garageFilter } = require("../utils/resolveFranchiseAccountsScope");
 
 async function nextInvoiceNo(garageId) {
   const count = await Invoice.countDocuments({ garageId });
@@ -60,58 +67,15 @@ async function nextInvoiceNo(garageId) {
 }
 
 // ─── Compute totals from lines ────────────────────────────────────
-function computeTotals(
-  services,
-  parts,
-  labourPercent = 20,
-  discountAmount = 0,
-) {
-  const servicesSubTotal = services.reduce(
-    (s, line) => s + (line.lineTotal ?? 0),
-    0,
-  );
-  const partsSubTotal = parts.reduce((s, line) => s + (line.lineTotal ?? 0), 0);
-  const labourCharge = parseFloat(
-    (servicesSubTotal * (labourPercent / 100)).toFixed(2),
-  );
-  const taxAmount =
-    services.reduce((s, l) => {
-      const base = l.lineTotal ?? 0;
-      return s + parseFloat((base * ((l.taxPercent ?? 0) / 100)).toFixed(2));
-    }, 0) +
-    parts.reduce((s, l) => {
-      const base = (l.unitPrice ?? 0) * (l.quantity ?? 1) - (l.discount ?? 0);
-      return s + parseFloat((base * ((l.taxPercent ?? 0) / 100)).toFixed(2));
-    }, 0);
-
-  const totalAmount = parseFloat(
-    (
-      servicesSubTotal +
-      partsSubTotal +
-      labourCharge +
-      taxAmount -
-      discountAmount
-    ).toFixed(2),
-  );
-
-  return {
-    servicesSubTotal,
-    partsSubTotal,
-    labourCharge,
-    taxAmount,
-    totalAmount,
-  };
-}
-
 // ─────────────────────────────────────────────────────────────────
 //  GET /api/v1/invoices?status=&customerId=&page=&limit=&search=
 // ─────────────────────────────────────────────────────────────────
 const listInvoices = asyncHandler(async (req, res) => {
-  const garageId = await resolveGarageId(req.user);
-  if (!garageId) return sendError(res, 404, "Garage not found.");
+  const scope = await resolveFranchiseAccountsScope(req.user, req.query.branch);
+  if (!scope) return sendError(res, 404, "Garage not found.");
 
   const { status, customerId, repairOrderId, paymentStatus, dateFrom, dateTo, search, page = 1, limit = 20 } = req.query;
-  const filter = { garageId, isDeleted: false };
+  const filter = { garageId: garageFilter(scope), isDeleted: false };
   if (status) filter.status = status;
   if (customerId) filter.customerId = customerId;
   if (repairOrderId) filter.repairOrderId = repairOrderId;
@@ -122,7 +86,6 @@ const listInvoices = asyncHandler(async (req, res) => {
     if (dateTo)   filter.createdAt.$lte = new Date(dateTo);
   }
 
-  // Full-text search: match invoice number OR customers by name/phone
   if (search && search.trim()) {
     const User = require("../models/User.model");
     const rx = new RegExp(escapeRegex(search.trim()), "i");
@@ -144,6 +107,7 @@ const listInvoices = asyncHandler(async (req, res) => {
     Invoice.find(filter)
       .populate("customerId", "fullName phoneNo emailId")
       .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo")
+      .populate("garageId", "garageName")
       .sort({ createdAt: -1 })
       .skip((safePage - 1) * safeLimit)
       .limit(safeLimit)
@@ -155,6 +119,7 @@ const listInvoices = asyncHandler(async (req, res) => {
     invoices,
     total,
     page: safePage,
+    isFranchiseView: scope.isFranchiseView,
   });
 });
 
@@ -221,18 +186,9 @@ const createInvoice = asyncHandler(async (req, res) => {
 
   if (!customerId) return sendError(res, 400, "customerId is required.");
 
-  // Recompute line totals in case frontend sent raw prices without lineTotal
-  const normalizedServices = services.map((s) => ({
-    ...s,
-    lineTotal: s.lineTotal ?? (s.price ?? 0) - (s.discount ?? 0),
-  }));
-  const normalizedParts = parts.map((p) => ({
-    ...p,
-    lineTotal:
-      p.lineTotal ?? (p.unitPrice ?? 0) * (p.quantity ?? 1) - (p.discount ?? 0),
-  }));
-
-  const totals = computeTotals(
+  const normalizedServices = normalizeInvoiceServiceLines(services);
+  const normalizedParts = normalizeInvoicePartLines(parts);
+  const totals = computeInvoiceTotals(
     normalizedServices,
     normalizedParts,
     Number(labourPercent) || 20,
@@ -250,9 +206,13 @@ const createInvoice = asyncHandler(async (req, res) => {
     services: normalizedServices,
     parts: normalizedParts,
     tags,
-    ...totals,
-    labourPercent: Number(labourPercent) || 20,
-    discountAmount: Number(discountAmount) || 0,
+    servicesSubTotal: totals.servicesSubTotal,
+    partsSubTotal: totals.partsSubTotal,
+    labourCharge: totals.labourCharge,
+    labourPercent: totals.labourPercent,
+    discountAmount: totals.discountAmount,
+    taxAmount: totals.taxAmount,
+    totalAmount: totals.totalAmount,
     paymentStatus,
     paidAmount: resolvePaidAmount(paymentStatus, totals.totalAmount, paidAmount),
     notifyCustomer,
@@ -263,6 +223,9 @@ const createInvoice = asyncHandler(async (req, res) => {
   });
 
   await applyInventoryDelta(garageId, [], normalizedParts);
+
+  // Legacy no-op retained for compatibility with older usage hooks.
+  incrementUsage(garageId, "invoices");
 
   // Populate so the frontend can display customer & vehicle immediately
   const invoice = await Invoice.findById(created._id)
@@ -293,19 +256,28 @@ const updateInvoice = asyncHandler(async (req, res) => {
   const { services, parts, labourPercent, discountAmount, ...rest } = req.body;
 
   // If line items changed — recompute totals
-  if (services !== undefined || parts !== undefined) {
-    const newServices = services ?? invoice.services;
-    const newParts = parts ?? invoice.parts;
+  if (
+    services !== undefined ||
+    parts !== undefined ||
+    labourPercent !== undefined ||
+    discountAmount !== undefined
+  ) {
+    const newServices = normalizeInvoiceServiceLines(services ?? invoice.services);
+    const newParts = normalizeInvoicePartLines(parts ?? invoice.parts);
     const lp = Number(labourPercent ?? invoice.labourPercent) || 20;
     const dis = Number(discountAmount ?? invoice.discountAmount) || 0;
 
-    const totals = computeTotals(newServices, newParts, lp, dis);
+    const totals = computeInvoiceTotals(newServices, newParts, lp, dis);
     Object.assign(invoice, {
       services: newServices,
       parts: newParts,
-      labourPercent: lp,
-      discountAmount: dis,
-      ...totals,
+      servicesSubTotal: totals.servicesSubTotal,
+      partsSubTotal: totals.partsSubTotal,
+      labourCharge: totals.labourCharge,
+      labourPercent: totals.labourPercent,
+      discountAmount: totals.discountAmount,
+      taxAmount: totals.taxAmount,
+      totalAmount: totals.totalAmount,
     });
   }
 
@@ -327,7 +299,9 @@ const updateInvoice = asyncHandler(async (req, res) => {
     rest.paymentStatus !== undefined ||
     rest.paidAmount !== undefined ||
     services !== undefined ||
-    parts !== undefined
+    parts !== undefined ||
+    labourPercent !== undefined ||
+    discountAmount !== undefined
   ) {
     invoice.paidAmount = resolvePaidAmount(
       invoice.paymentStatus,
@@ -362,7 +336,7 @@ const deleteInvoice = asyncHandler(async (req, res) => {
   const invoice = await Invoice.findOneAndUpdate(
     { _id: req.params.id, garageId, isDeleted: false },
     { isDeleted: true },
-    { new: true },
+    { returnDocument: "after" },
   );
 
   if (!invoice) return sendError(res, 404, "Invoice not found.");
@@ -372,11 +346,11 @@ const deleteInvoice = asyncHandler(async (req, res) => {
 
 // GET /api/v1/invoices/stats?dateFrom=&dateTo=
 const getInvoiceStats = asyncHandler(async (req, res) => {
-  const garageId = await resolveGarageId(req.user);
-  if (!garageId) return sendError(res, 404, "Garage not found.");
+  const scope = await resolveFranchiseAccountsScope(req.user, req.query.branch);
+  if (!scope) return sendError(res, 404, "Garage not found.");
 
   const { dateFrom, dateTo } = req.query;
-  const filter = { garageId, isDeleted: false };
+  const filter = { garageId: garageFilter(scope), isDeleted: false };
   if (dateFrom || dateTo) {
     filter.createdAt = {};
     if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);

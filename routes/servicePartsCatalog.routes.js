@@ -23,6 +23,8 @@
 const router = require("express").Router();
 const multer = require("multer");
 const protect = require("../middlewares/auth");
+const checkSubscription = require("../middlewares/checkSubscription");
+const checkFeature = require("../middlewares/checkFeature");
 const {
   listCatalogItems,
   listCategories,
@@ -54,7 +56,7 @@ const upload = multer({
   },
 });
 
-router.use(protect);
+router.use(protect, checkSubscription);
 
 // GET  /api/v1/catalog/inventory-stats
 router.get("/inventory-stats", getInventoryStats);
@@ -68,8 +70,8 @@ router.get("/categories", listCategories);
 // POST /api/v1/catalog   — create one item (service or part)
 router.post("/", createCatalogItem);
 
-// POST /api/v1/catalog/bulk-upload?itemType=service|part  — file upload (field: "file")
-router.post("/bulk-upload", upload.single("file"), bulkUploadCatalogItems);
+// POST /api/v1/catalog/bulk-upload?itemType=service|part  — file upload (field: "file") (feature-gated)
+router.post("/bulk-upload", checkFeature("bulk_upload"), upload.single("file"), bulkUploadCatalogItems);
 
 // PUT  /api/v1/catalog/:id?itemType=service|part
 router.put("/:id", updateCatalogItem);

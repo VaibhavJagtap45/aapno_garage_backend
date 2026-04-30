@@ -3,9 +3,25 @@ const mongoose = require("mongoose");
 //  User Schema
 const UserSchema = new mongoose.Schema(
   {
+    // ── Tenant association ────────────────────────────────────────
+    // `garage` is kept for legacy callers (member/vendor/customer assignments).
+    // For owners, the active tenant is `activeGarageId` — owners may operate
+    // many garages, but only one is "active" per session.
     garage: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Garage",
+      default: null,
+      index: true,
+    },
+    activeGarageId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Garage",
+      default: null,
+      index: true,
+    },
+    franchiseId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Franchise",
       default: null,
       index: true,
     },
@@ -45,7 +61,19 @@ const UserSchema = new mongoose.Schema(
       type: String,
       required: true,
       enum: {
-        values: ["owner", "customer", "member", "vendor"],
+        values: [
+          // SaaS roles
+          "superAdmin",
+          "franchiseAdmin",
+          "owner",
+          "manager",
+          "staff",
+          // Legacy / domain roles (preserved for backward compat)
+          "franchiseOwner",
+          "member",
+          "customer",
+          "vendor",
+        ],
         message: "Invalid role",
       },
       default: "owner",

@@ -3,25 +3,24 @@ const Inventory = require("../models/Inventry.model");
 const asyncHandler = require("../utils/asyncHandler");
 const { sendSuccess, sendError } = require("../utils/response.utils");
 const resolveGarageId = require("../utils/resolveGarageId");
+const { resolveFranchiseAccountsScope, garageFilter } = require("../utils/resolveFranchiseAccountsScope");
 
-// ─────────────────────────────────────────────────────────────────
-//  GET /api/v1/stock-in?page=1&limit=50
-// ─────────────────────────────────────────────────────────────────
 const listStockIn = asyncHandler(async (req, res) => {
-  const garageId = await resolveGarageId(req.user);
-  if (!garageId) return sendError(res, 404, "Garage not found.");
+  const scope = await resolveFranchiseAccountsScope(req.user, req.query.branch);
+  if (!scope) return sendError(res, 404, "Garage not found.");
 
   const { page = 1, limit = 50 } = req.query;
   const safePage  = Math.max(Number(page)  || 1, 1);
   const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
   const skip = (safePage - 1) * safeLimit;
 
-  const filter = { garageId, isDeleted: false };
+  const filter = { garageId: garageFilter(scope), isDeleted: false };
 
   const [records, total] = await Promise.all([
     StockIn.find(filter)
       .populate("vendorId", "fullName phoneNo")
       .populate("purchaseOrderId", "orderNo")
+      .populate("garageId", "garageName")
       .sort({ date: -1 })
       .skip(skip)
       .limit(safeLimit)
@@ -29,7 +28,10 @@ const listStockIn = asyncHandler(async (req, res) => {
     StockIn.countDocuments(filter),
   ]);
 
-  return sendSuccess(res, 200, "Stock-in records fetched.", { records, total, page: safePage });
+  return sendSuccess(res, 200, "Stock-in records fetched.", {
+    records, total, page: safePage,
+    isFranchiseView: scope.isFranchiseView,
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────
@@ -116,13 +118,12 @@ const deleteStockIn = asyncHandler(async (req, res) => {
   return sendSuccess(res, 200, "Stock-in record deleted.");
 });
 
-// GET /api/v1/stock-in/stats?dateFrom=&dateTo=
 const getStockInStats = asyncHandler(async (req, res) => {
-  const garageId = await resolveGarageId(req.user);
-  if (!garageId) return sendError(res, 404, "Garage not found.");
+  const scope = await resolveFranchiseAccountsScope(req.user, req.query.branch);
+  if (!scope) return sendError(res, 404, "Garage not found.");
 
   const { dateFrom, dateTo } = req.query;
-  const filter = { garageId, isDeleted: false };
+  const filter = { garageId: garageFilter(scope), isDeleted: false };
   if (dateFrom || dateTo) {
     filter.date = {};
     if (dateFrom) filter.date.$gte = new Date(dateFrom);

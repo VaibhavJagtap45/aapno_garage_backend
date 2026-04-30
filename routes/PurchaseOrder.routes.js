@@ -1,6 +1,8 @@
 // ─── purchaseOrder.routes.js ──────────────────────────────────────
 const router = require("express").Router();
 const protect = require("../middlewares/auth");
+const checkSubscription = require("../middlewares/checkSubscription");
+const checkFeature = require("../middlewares/checkFeature");
 const {
   listPurchaseOrders,
   createPurchaseOrder,
@@ -9,7 +11,7 @@ const {
   getVendorsDue,
 } = require("../controllers/PurchaseOrder.controller");
 
-router.use(protect);
+router.use(protect, checkSubscription, checkFeature("purchase_orders"));
 
 // GET  /api/v1/purchase-orders/vendors-due
 router.get("/vendors-due", getVendorsDue);

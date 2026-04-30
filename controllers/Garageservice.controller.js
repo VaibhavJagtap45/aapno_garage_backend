@@ -213,7 +213,7 @@ const deleteService = asyncHandler(async (req, res) => {
   const service = await GarageServiceCatalog.findOneAndUpdate(
     { _id: req.params.id, garageId, isDeleted: false },
     { isDeleted: true },
-    { new: true },
+    { returnDocument: "after" },
   );
 
   if (!service) return sendError(res, 404, "Service not found.");

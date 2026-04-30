@@ -1,8 +1,9 @@
 const router = require("express").Router();
 const protect = require("../middlewares/auth");
+const checkSubscription = require("../middlewares/checkSubscription");
 const { listStockIn, createStockIn, deleteStockIn, getStockInStats } = require("../controllers/stockIn.controller");
 
-router.use(protect);
+router.use(protect, checkSubscription);
 
 // GET  /api/v1/stock-in/stats?dateFrom=&dateTo=
 router.get("/stats", getStockInStats);
