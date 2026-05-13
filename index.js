@@ -44,10 +44,13 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
 
 // ── CORS ───────────────────────────────────────────────────────────
 const allowedOrigins =
-  process.env.ALLOWED_ORIGINS?.split(",").map((o) => o.trim()) ?? [];
+  process.env.ALLOWED_ORIGINS?.split(",").map((o) => o.trim()).filter(Boolean) ?? [];
 const localDevOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
 const privateLanDevOrigin =
   /^https?:\/\/(10(?:\.\d{1,3}){3}|172\.(1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2})(:\d+)?$/i;
+// Auto-allow any Vercel-hosted deployment (production aliases + preview URLs).
+// Tighten this if you ever host non-admin code on a Vercel subdomain.
+const vercelOrigin = /^https:\/\/[a-z0-9-]+\.vercel\.app$/i;
 
 app.use(
   cors({
@@ -62,6 +65,7 @@ app.use(
         return callback(null, true);
       }
       if (allowedOrigins.includes(origin)) return callback(null, true);
+      if (vercelOrigin.test(origin)) return callback(null, true);
       callback(new Error(`CORS: origin '${origin}' not allowed`));
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
