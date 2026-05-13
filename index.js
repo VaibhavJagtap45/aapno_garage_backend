@@ -25,6 +25,8 @@ const ExpenseRoutes = require("./routes/expense.routes");
 const CustomerRoutes = require("./routes/customer.routes");
 const MemberRoutes = require("./routes/member.routes");
 const AdminRoutes = require("./routes/admin.routes");
+const AdminInvoiceRoutes = require("./routes/adminInvoice.routes");
+const AdminRepairOrderRoutes = require("./routes/adminRepairOrder.routes");
 const BookingRoutes = require("./routes/booking.routes");
 const ReportsRoutes = require("./routes/reports.routes");
 const FranchiseRoutes = require("./routes/franchise.routes");
@@ -84,6 +86,8 @@ app.get("/", (_req, res) =>
 // ── API Routes ─────────────────────────────────────────────────────
 const API_VERSION = process.env.BACKEND_VERSION ?? "v1";
 app.use(`/api/${API_VERSION}/auth`, AuthRoutes);
+app.use(`/api/${API_VERSION}/admin/invoices`, AdminInvoiceRoutes); // before generic AdminRoutes
+app.use(`/api/${API_VERSION}/admin/repair-orders`, AdminRepairOrderRoutes);
 app.use(`/api/${API_VERSION}/admin`, AdminRoutes); // must be before UserListRoutes (no-prefix catch-all)
 app.use(`/api/${API_VERSION}/user`, UserRoutes);
 app.use(`/api/${API_VERSION}/vehicle`, VehicleRoutes);

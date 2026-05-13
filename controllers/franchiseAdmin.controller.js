@@ -12,6 +12,8 @@ const {
   getFranchiseGarageCapacity,
 } = require("../services/franchiseCapacity.service");
 
+const MAX_FRANCHISE_GARAGES = 3;
+
 const normalizeFranchiseCode = (value) =>
   typeof value === "string" ? value.trim().toUpperCase() : value;
 
@@ -20,6 +22,11 @@ const isDuplicateFranchiseCodeError = (err) =>
 
 const getDuplicateFranchiseCodeMessage = (code) =>
   `A franchise with code '${code || "this code"}' already exists.`;
+
+const normalizeAllowedPlan = (plan) => {
+  const slug = normalizePlanSlug(plan) || "basic";
+  return slug === "premium" ? "franchise" : slug;
+};
 
 const buildGarageCountMap = async (franchiseIds = []) => {
   if (!franchiseIds.length) return new Map();
@@ -44,9 +51,13 @@ const buildGarageCountMap = async (franchiseIds = []) => {
 };
 
 const enrichFranchise = (franchise, garageCount = 0) => {
-  const planSlug = normalizePlanSlug(franchise.plan) || "basic";
+  const planSlug = normalizeAllowedPlan(franchise.plan);
   const planDetails = getPlan(planSlug) || getPlan("basic");
-  const garageLimit = planDetails?.garageLimit ?? 1;
+  const configuredLimit = planDetails?.garageLimit ?? 1;
+  const garageLimit =
+    configuredLimit === -1
+      ? MAX_FRANCHISE_GARAGES
+      : Math.min(configuredLimit, MAX_FRANCHISE_GARAGES);
 
   return {
     ...franchise,
@@ -56,7 +67,7 @@ const enrichFranchise = (franchise, garageCount = 0) => {
           slug: planDetails.slug,
           name: planDetails.name,
           price: planDetails.price,
-          garageLimit: planDetails.garageLimit,
+          garageLimit,
           limits: planDetails.limits,
           features: planDetails.features,
           badge: planDetails.badge,
@@ -104,14 +115,13 @@ const getFranchiseStats = asyncHandler(async (_req, res) => {
   const planBreakdown = {
     basic: 0,
     franchise: 0,
-    premium: 0,
     free: 0,
     starter: 0,
     pro: 0,
   };
 
   franchises.forEach((franchise) => {
-    const slug = normalizePlanSlug(franchise.plan) || "basic";
+    const slug = normalizeAllowedPlan(franchise.plan);
     planBreakdown[slug] = (planBreakdown[slug] || 0) + 1;
   });
 
@@ -145,7 +155,7 @@ const createFranchise = asyncHandler(async (req, res) => {
   }
 
   if (payload.plan !== undefined) {
-    payload.plan = normalizePlanSlug(payload.plan) || "basic";
+    payload.plan = normalizeAllowedPlan(payload.plan);
   } else {
     payload.plan = "basic";
   }
@@ -191,7 +201,7 @@ const updateFranchise = asyncHandler(async (req, res) => {
   }
 
   if (payload.plan !== undefined) {
-    payload.plan = normalizePlanSlug(payload.plan) || "basic";
+    payload.plan = normalizeAllowedPlan(payload.plan);
   }
 
   if (payload.sharingPolicy) {
@@ -315,9 +325,6 @@ const getFranchiseDetail = asyncHandler(async (req, res) => {
     ...g,
     approvalStatus: g.approvalStatus || "pending",
   }));
-
-  const planSlug = normalizePlanSlug(franchise.plan) || "basic";
-  const planDetails = getPlan(planSlug) || getPlan("basic");
 
   return sendSuccess(res, 200, "Franchise detail fetched", {
     franchise: enrichFranchise(franchise, garages.length),

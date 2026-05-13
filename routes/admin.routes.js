@@ -3,7 +3,11 @@ const adminProtect = require("../middlewares/adminAuth");
 const {
   adminLogin,
   getAllGarages,
+  getGarageDetail,
   getGarageStats,
+  getVehicleMeta,
+  addVehicleBrand,
+  addVehicleModel,
   createGarage,
   updateGarage,
   deleteGarage,
@@ -53,11 +57,17 @@ router.get("/users", adminProtect, listUsers);
 // Garages
 router.get("/garages/stats", adminProtect, getGarageStats);
 router.get("/garages", adminProtect, getAllGarages);
+router.get("/garages/:id", adminProtect, getGarageDetail);
 router.post("/garages", adminProtect, createGarage);
 router.put("/garages/:id", adminProtect, updateGarage);
 router.delete("/garages/:id", adminProtect, deleteGarage);
 router.patch("/garages/:id/approve", adminProtect, approveGarage);
 router.patch("/garages/:id/reject", adminProtect, rejectGarage);
+
+// Vehicle brand/model master data
+router.get("/vehicle-meta", adminProtect, getVehicleMeta);
+router.post("/vehicle-meta/brand", adminProtect, addVehicleBrand);
+router.post("/vehicle-meta/model", adminProtect, addVehicleModel);
 
 // Franchises
 router.get("/franchises/stats", adminProtect, getFranchiseStats);

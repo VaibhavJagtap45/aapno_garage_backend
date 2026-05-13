@@ -159,7 +159,7 @@ const createInvoice = asyncHandler(async (req, res) => {
     services = [],
     parts = [],
     tags = [],
-    labourPercent = 20,
+    labourPercent = 0,
     discountAmount = 0,
     paidAmount = 0,
     paymentStatus = "unpaid",
@@ -191,7 +191,7 @@ const createInvoice = asyncHandler(async (req, res) => {
   const totals = computeInvoiceTotals(
     normalizedServices,
     normalizedParts,
-    Number(labourPercent) || 20,
+    Number(labourPercent) || 0,
     Number(discountAmount) || 0,
   );
 
@@ -264,7 +264,7 @@ const updateInvoice = asyncHandler(async (req, res) => {
   ) {
     const newServices = normalizeInvoiceServiceLines(services ?? invoice.services);
     const newParts = normalizeInvoicePartLines(parts ?? invoice.parts);
-    const lp = Number(labourPercent ?? invoice.labourPercent) || 20;
+    const lp = Number(labourPercent ?? invoice.labourPercent) || 0;
     const dis = Number(discountAmount ?? invoice.discountAmount) || 0;
 
     const totals = computeInvoiceTotals(newServices, newParts, lp, dis);

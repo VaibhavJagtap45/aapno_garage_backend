@@ -190,7 +190,7 @@ function normalizeInvoicePartLines(lines = []) {
 function computeInvoiceTotals(
   services = [],
   parts = [],
-  labourPercent = 20,
+  labourPercent = 0,
   discountAmount = 0,
 ) {
   const servicesSubTotal = roundCurrency(

@@ -5,6 +5,11 @@
 const mongoose = require("mongoose");
 const Garage = require("../models/Garage.model");
 const User = require("../models/User.model");
+const Inventory = require("../models/Inventry.model");
+const Service = require("../models/Service.model");
+const RepairOrder = require("../models/RepairOrder.model");
+const Booking = require("../models/Booking.model");
+const Vehicle = require("../models/Vehicle.model");
 const { findOrCreateOwner } = require("./owner.service");
 const { ensureFranchiseCapacity } = require("./franchiseCapacity.service");
 const {
@@ -65,6 +70,77 @@ async function getGarageStats() {
   return { total, pending, approved, rejected };
 }
 
+async function getGarageDetail(id) {
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new BadRequestError("Invalid garage id.");
+  }
+
+  const garage = await Garage.findById(id)
+    .populate("owner", "fullName phoneNo emailId isVerified role state createdAt")
+    .populate("manager", "fullName phoneNo emailId role")
+    .populate("franchiseId", "name code approvalStatus plan sharingPolicy")
+    .lean();
+
+  if (!garage) throw new NotFoundError("Garage not found.");
+
+  const [inventory, services, repairOrders, bookings] = await Promise.all([
+    Inventory.find({ garageId: id }).sort({ updatedAt: -1 }).lean(),
+    Service.find({ garageId: id, isDeleted: { $ne: true } })
+      .sort({ serviceDate: -1, createdAt: -1 })
+      .lean(),
+    RepairOrder.find({ garageId: id, isDeleted: { $ne: true } })
+      .populate("customerId", "fullName phoneNo emailId")
+      .populate("assignedTo", "fullName phoneNo role")
+      .sort({ createdAt: -1 })
+      .lean(),
+    Booking.find({ garage: id })
+      .populate("customer", "fullName phoneNo emailId")
+      .sort({ scheduledAt: -1, createdAt: -1 })
+      .lean(),
+  ]);
+
+  const vehicleIds = [
+    ...services.map((s) => s.vehicleId),
+    ...repairOrders.map((r) => r.vehicleId),
+    ...bookings.map((b) => b.vehicle),
+  ]
+    .filter(Boolean)
+    .map(String);
+  const uniqueVehicleIds = [...new Set(vehicleIds)];
+  const vehicles = uniqueVehicleIds.length
+    ? await Vehicle.find({ _id: { $in: uniqueVehicleIds } })
+        .populate("user", "fullName phoneNo emailId")
+        .sort({ updatedAt: -1 })
+        .lean()
+    : [];
+
+  const totals = {
+    inventoryItems: inventory.length,
+    lowStockItems: inventory.filter(
+      (item) =>
+        item.manageInventory !== false &&
+        Number(item.quantityInHand || 0) <= Number(item.minimumStockLevel || 0),
+    ).length,
+    services: services.length,
+    repairOrders: repairOrders.length,
+    bookings: bookings.length,
+    vehicles: vehicles.length,
+    revenue:
+      services.reduce((sum, s) => sum + Number(s.totalAmount || 0), 0) +
+      repairOrders.reduce((sum, r) => sum + Number(r.totalAmount || 0), 0),
+  };
+
+  return {
+    garage: { ...garage, approvalStatus: garage.approvalStatus || "pending" },
+    totals,
+    inventory,
+    services,
+    repairOrders,
+    bookings,
+    vehicles,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Create — supports new OR existing owner, multi-branch, setAsDefault
 // ─────────────────────────────────────────────────────────────────
@@ -115,6 +191,13 @@ async function createGarage(input) {
     const existingCount = await Garage.countDocuments({ owner: owner._id }).session(
       session,
     );
+
+    if (!franchiseId && existingCount > 0) {
+      throw new BadRequestError(
+        "This owner already has a garage. Add extra garages from a franchise only.",
+      );
+    }
+
     const shouldBePrimary =
       setAsDefault === true || (existingCount === 0 && setAsDefault !== false);
 
@@ -341,6 +424,7 @@ async function setApprovalStatus(id, approvalStatus) {
 
 module.exports = {
   listGarages,
+  getGarageDetail,
   getGarageStats,
   createGarage,
   updateGarage,

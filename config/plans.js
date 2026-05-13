@@ -100,9 +100,9 @@ const DEFAULT_BILLING_PLANS = {
   premium: {
     slug: "premium",
     name: "Premium",
-    description: "Advanced scale plan for franchises running up to seven garages.",
+    description: "Advanced scale plan for franchises running up to three garages.",
     price: { monthly: 4999, yearly: 49990 },
-    garageLimit: 7,
+    garageLimit: 3,
     limits: {
       maxRepairOrders: -1,
       maxInvoices: -1,

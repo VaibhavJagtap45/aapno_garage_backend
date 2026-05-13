@@ -3,6 +3,7 @@ const Franchise = require("../models/Franchise.model");
 const { getPlan, normalizePlanSlug } = require("../config/plans");
 
 const DEFAULT_FRANCHISE_PLAN = "basic";
+const MAX_FRANCHISE_GARAGES = 3;
 
 const getFranchisePlanDetails = (planSlug) => {
   const normalized = normalizePlanSlug(planSlug) || DEFAULT_FRANCHISE_PLAN;
@@ -20,7 +21,11 @@ const getFranchiseGarageCapacity = async (franchiseId) => {
 
   const plan = getFranchisePlanDetails(franchise.plan);
   const garageCount = await Garage.countDocuments({ franchiseId });
-  const garageLimit = plan?.garageLimit ?? 1;
+  const configuredLimit = plan?.garageLimit ?? 1;
+  const garageLimit =
+    configuredLimit === -1
+      ? MAX_FRANCHISE_GARAGES
+      : Math.min(configuredLimit, MAX_FRANCHISE_GARAGES);
   const remaining =
     garageLimit === -1 ? -1 : Math.max(garageLimit - garageCount, 0);
 
