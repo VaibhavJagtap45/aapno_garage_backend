@@ -187,20 +187,13 @@ function normalizeInvoicePartLines(lines = []) {
   });
 }
 
-function computeInvoiceTotals(
-  services = [],
-  parts = [],
-  labourPercent = 0,
-  discountAmount = 0,
-) {
+function computeInvoiceTotals(services = [], parts = [], discountAmount = 0) {
   const servicesSubTotal = roundCurrency(
     services.reduce((sum, line) => sum + (Number(line?.lineTotal) || 0), 0),
   );
   const partsSubTotal = roundCurrency(
     parts.reduce((sum, line) => sum + (Number(line?.lineTotal) || 0), 0),
   );
-  const safeLabourPercent = roundPercent(labourPercent);
-  const labourCharge = roundCurrency(servicesSubTotal * (safeLabourPercent / 100));
   const taxAmount = roundCurrency(
     [...services, ...parts].reduce(
       (sum, line) =>
@@ -209,18 +202,16 @@ function computeInvoiceTotals(
     ),
   );
 
-  const maxDiscount = servicesSubTotal + partsSubTotal + labourCharge + taxAmount;
+  const maxDiscount = servicesSubTotal + partsSubTotal + taxAmount;
   const safeDiscountAmount = clampDiscount(discountAmount, maxDiscount);
 
   return {
     servicesSubTotal,
     partsSubTotal,
-    labourCharge,
-    labourPercent: safeLabourPercent,
     taxAmount,
     discountAmount: safeDiscountAmount,
     totalAmount: roundCurrency(
-      servicesSubTotal + partsSubTotal + labourCharge + taxAmount - safeDiscountAmount,
+      servicesSubTotal + partsSubTotal + taxAmount - safeDiscountAmount,
     ),
   };
 }

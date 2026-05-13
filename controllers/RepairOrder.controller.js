@@ -799,59 +799,86 @@ function isManualPartLine(line) {
   );
 }
 
+async function nextCatalogServiceNo(garageId) {
+  const existing = await GarageServiceCatalog.find(
+    { garageId, serviceNo: { $regex: /^S\d+$/ } },
+    { serviceNo: 1 },
+  ).lean();
+  const maxNum = existing.reduce((max, doc) => {
+    const n = parseInt((doc.serviceNo || "").slice(1), 10);
+    return Number.isNaN(n) ? max : Math.max(max, n);
+  }, 0);
+  return `S${String(maxNum + 1).padStart(3, "0")}`;
+}
+
 async function syncManualRepairOrderItems(garageId, services = [], parts = []) {
-  const syncedServices = await Promise.all(
-    (Array.isArray(services) ? services : []).map(async (line) => {
-      const existingId =
-        line?.catalogId ||
-        line?.serviceId ||
-        line?.service?._id ||
-        line?.service?.id;
-      const manual = isManualServiceLine(line);
+  // Process services serially so concurrent inserts can't collide on the
+  // unique (garageId, serviceNo) index when generating new catalog entries.
+  const syncedServices = [];
+  for (const line of Array.isArray(services) ? services : []) {
+    const existingId =
+      line?.catalogId ||
+      line?.serviceId ||
+      line?.service?._id ||
+      line?.service?.id;
+    const manual = isManualServiceLine(line);
 
-      if (!manual || existingId) {
-        return line;
+    if (!manual || existingId) {
+      syncedServices.push(line);
+      continue;
+    }
+
+    const name = normalizeManualText(
+      line?.name || line?.serviceName || line?.title,
+    );
+    if (!name) {
+      syncedServices.push(line);
+      continue;
+    }
+
+    const serviceRx = new RegExp(`^${escapeRegex(name)}$`, "i");
+    let service = await GarageServiceCatalog.findOne({
+      garageId,
+      isDeleted: false,
+      name: serviceRx,
+    })
+      .select("_id name mrp")
+      .lean();
+
+    if (!service) {
+      const price = Number(line?.price ?? line?.mrp ?? line?.lineTotal ?? 0) || 0;
+      // Retry up to 5x to dodge race conditions on the serviceNo sequence.
+      let created;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          created = await GarageServiceCatalog.create({
+            garageId,
+            name,
+            serviceNo: await nextCatalogServiceNo(garageId),
+            category: "Other",
+            mrp: price,
+            applicability: "generic",
+            applicableBrands: [],
+            applicableModels: [],
+            isActive: true,
+          });
+          break;
+        } catch (err) {
+          if (err.code === 11000 && attempt < 4) continue;
+          throw err;
+        }
       }
+      service = created.toObject();
+    }
 
-      const name = normalizeManualText(
-        line?.name || line?.serviceName || line?.title,
-      );
-      if (!name) return line;
-
-      const serviceRx = new RegExp(`^${escapeRegex(name)}$`, "i");
-      let service = await GarageServiceCatalog.findOne({
-        garageId,
-        isDeleted: false,
-        name: serviceRx,
-      })
-        .select("_id name mrp")
-        .lean();
-
-      if (!service) {
-        const price =
-          Number(line?.price ?? line?.mrp ?? line?.lineTotal ?? 0) || 0;
-        service = await GarageServiceCatalog.create({
-          garageId,
-          name,
-          category: "Other",
-          mrp: price,
-          applicability: "generic",
-          applicableBrands: [],
-          applicableModels: [],
-          isActive: true,
-        });
-        service = service.toObject();
-      }
-
-      return {
-        ...line,
-        entryMode: "manual",
-        catalogId: service._id,
-        name: service.name,
-        price: Number(line?.price ?? service.mrp ?? 0) || 0,
-      };
-    }),
-  );
+    syncedServices.push({
+      ...line,
+      entryMode: "manual",
+      catalogId: service._id,
+      name: service.name,
+      price: Number(line?.price ?? service.mrp ?? 0) || 0,
+    });
+  }
 
   const syncedParts = await Promise.all(
     (Array.isArray(parts) ? parts : []).map(async (line) => {

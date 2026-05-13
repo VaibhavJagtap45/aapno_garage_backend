@@ -43,7 +43,7 @@ async function getTallyExportData({ dateFrom, dateTo, franchiseId, garageId } = 
 
   const rows = invoices.map((inv) => {
     const garage = inv.garageId || {};
-    const serviceAmount = (inv.servicesSubTotal || 0) + (inv.partsSubTotal || 0) + (inv.labourCharge || 0);
+    const serviceAmount = (inv.servicesSubTotal || 0) + (inv.partsSubTotal || 0);
     const gst = garage.isGstApplicable ? (inv.taxAmount || 0) : 0;
 
     return {

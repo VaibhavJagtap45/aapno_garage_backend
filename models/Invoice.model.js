@@ -67,8 +67,6 @@ const invoiceSchema = new mongoose.Schema(
 
     servicesSubTotal: { type: Number, default: 0 },
     partsSubTotal: { type: Number, default: 0 },
-    labourCharge: { type: Number, default: 0 },
-    labourPercent: { type: Number, default: 0 },
     discountAmount: { type: Number, default: 0 },
     taxAmount: { type: Number, default: 0 },
     totalAmount: { type: Number, default: 0 },

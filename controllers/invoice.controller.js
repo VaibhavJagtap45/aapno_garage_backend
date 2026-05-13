@@ -159,7 +159,6 @@ const createInvoice = asyncHandler(async (req, res) => {
     services = [],
     parts = [],
     tags = [],
-    labourPercent = 0,
     discountAmount = 0,
     paidAmount = 0,
     paymentStatus = "unpaid",
@@ -191,7 +190,6 @@ const createInvoice = asyncHandler(async (req, res) => {
   const totals = computeInvoiceTotals(
     normalizedServices,
     normalizedParts,
-    Number(labourPercent) || 0,
     Number(discountAmount) || 0,
   );
 
@@ -208,8 +206,6 @@ const createInvoice = asyncHandler(async (req, res) => {
     tags,
     servicesSubTotal: totals.servicesSubTotal,
     partsSubTotal: totals.partsSubTotal,
-    labourCharge: totals.labourCharge,
-    labourPercent: totals.labourPercent,
     discountAmount: totals.discountAmount,
     taxAmount: totals.taxAmount,
     totalAmount: totals.totalAmount,
@@ -253,28 +249,24 @@ const updateInvoice = asyncHandler(async (req, res) => {
   const previousParts = invoice.parts.map((part) =>
     typeof part.toObject === "function" ? part.toObject() : part,
   );
-  const { services, parts, labourPercent, discountAmount, ...rest } = req.body;
+  const { services, parts, discountAmount, ...rest } = req.body;
 
   // If line items changed — recompute totals
   if (
     services !== undefined ||
     parts !== undefined ||
-    labourPercent !== undefined ||
     discountAmount !== undefined
   ) {
     const newServices = normalizeInvoiceServiceLines(services ?? invoice.services);
     const newParts = normalizeInvoicePartLines(parts ?? invoice.parts);
-    const lp = Number(labourPercent ?? invoice.labourPercent) || 0;
     const dis = Number(discountAmount ?? invoice.discountAmount) || 0;
 
-    const totals = computeInvoiceTotals(newServices, newParts, lp, dis);
+    const totals = computeInvoiceTotals(newServices, newParts, dis);
     Object.assign(invoice, {
       services: newServices,
       parts: newParts,
       servicesSubTotal: totals.servicesSubTotal,
       partsSubTotal: totals.partsSubTotal,
-      labourCharge: totals.labourCharge,
-      labourPercent: totals.labourPercent,
       discountAmount: totals.discountAmount,
       taxAmount: totals.taxAmount,
       totalAmount: totals.totalAmount,
@@ -300,7 +292,6 @@ const updateInvoice = asyncHandler(async (req, res) => {
     rest.paidAmount !== undefined ||
     services !== undefined ||
     parts !== undefined ||
-    labourPercent !== undefined ||
     discountAmount !== undefined
   ) {
     invoice.paidAmount = resolvePaidAmount(
