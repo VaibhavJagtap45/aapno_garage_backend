@@ -15,18 +15,6 @@ const {
   rejectGarage,
 } = require("../controllers/admin.controller");
 const {
-  listFranchises,
-  getFranchiseStats,
-  createFranchise,
-  updateFranchise,
-  deleteFranchise,
-  approveFranchise,
-  rejectFranchise,
-  linkGarageToFranchise,
-  unlinkGarageFromFranchise,
-  getFranchiseDetail,
-} = require("../controllers/franchiseAdmin.controller");
-const {
   getAnalytics,
   getAnalyticsMeta,
 } = require("../controllers/analytics.controller");
@@ -68,17 +56,5 @@ router.patch("/garages/:id/reject", adminProtect, rejectGarage);
 router.get("/vehicle-meta", adminProtect, getVehicleMeta);
 router.post("/vehicle-meta/brand", adminProtect, addVehicleBrand);
 router.post("/vehicle-meta/model", adminProtect, addVehicleModel);
-
-// Franchises
-router.get("/franchises/stats", adminProtect, getFranchiseStats);
-router.get("/franchises", adminProtect, listFranchises);
-router.post("/franchises", adminProtect, createFranchise);
-router.get("/franchises/:id", adminProtect, getFranchiseDetail);
-router.put("/franchises/:id", adminProtect, updateFranchise);
-router.delete("/franchises/:id", adminProtect, deleteFranchise);
-router.patch("/franchises/:id/approve", adminProtect, approveFranchise);
-router.patch("/franchises/:id/reject", adminProtect, rejectFranchise);
-router.patch("/franchises/:id/link-garage", adminProtect, linkGarageToFranchise);
-router.patch("/franchises/unlink-garage/:garageId", adminProtect, unlinkGarageFromFranchise);
 
 module.exports = router;

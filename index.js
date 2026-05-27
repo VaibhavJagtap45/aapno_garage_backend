@@ -29,9 +29,7 @@ const AdminInvoiceRoutes = require("./routes/adminInvoice.routes");
 const AdminRepairOrderRoutes = require("./routes/adminRepairOrder.routes");
 const BookingRoutes = require("./routes/booking.routes");
 const ReportsRoutes = require("./routes/reports.routes");
-const FranchiseRoutes = require("./routes/franchise.routes");
 const InventoryTransferRoutes = require("./routes/inventoryTransfer.routes");
-const { stampFranchiseOnServices } = require("./utils/stampFranchiseOnServices");
 // const VehicleMetaRoutes = require("./routes/vehicleMeta.routes");
 const app = express(); //express js
 const PORT = process.env.PORT || 5000;
@@ -110,7 +108,6 @@ app.use(`/api/${API_VERSION}/customer`, CustomerRoutes);
 app.use(`/api/${API_VERSION}/member`, MemberRoutes);
 app.use(`/api/${API_VERSION}/bookings`, BookingRoutes);
 app.use(`/api/${API_VERSION}/reports`, ReportsRoutes);
-app.use(`/api/${API_VERSION}/franchises`, FranchiseRoutes);
 app.use(`/api/${API_VERSION}/inventory-transfers`, InventoryTransferRoutes);
 // ── 404 handler ────────────────────────────────────────────────────
 app.use((_req, res) =>
@@ -145,8 +142,7 @@ app.use((err, _req, res, _next) => {
 
 // ── Bootstrap ──────────────────────────────────────────────────────
 connectDB()
-  .then(async () => {
-    await stampFranchiseOnServices();
+  .then(() => {
     app.listen(PORT, () =>
       console.log(`Server running on PORT ${PORT} [${process.env.NODE_ENV}]`),
     );

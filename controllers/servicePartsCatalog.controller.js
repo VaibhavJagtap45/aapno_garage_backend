@@ -1,8 +1,6 @@
 const XLSX = require("xlsx");
 const GarageServiceCatalog = require("../models/GarageServiceCatalog.model");
 const Inventory = require("../models/Inventry.model");
-const Garage = require("../models/Garage.model");
-const Franchise = require("../models/Franchise.model");
 const asyncHandler = require("../utils/asyncHandler");
 const { sendError, sendSuccess } = require("../utils/response.utils");
 const resolveGarageId = require("../utils/resolveGarageId");
@@ -166,18 +164,6 @@ const listCatalogItems = asyncHandler(async (req, res) => {
 
   // ── SERVICES ────────────────────────────────────────────────────
   const query = { garageId, isDeleted: false };
-  const currentGarage = await Garage.findById(garageId).select("franchiseId").lean();
-  if (currentGarage?.franchiseId) {
-    const franchise = await Franchise.findById(currentGarage.franchiseId)
-      .select("sharingPolicy.shareServices")
-      .lean();
-    if (franchise?.sharingPolicy?.shareServices) {
-      const garageIds = await Garage.distinct("_id", {
-        franchiseId: currentGarage.franchiseId,
-      });
-      query.garageId = { $in: garageIds };
-    }
-  }
   const andConditions = [
     buildApplicabilityQuery({
       brand: normalizeText(brand),
@@ -230,19 +216,6 @@ const listCategories = asyncHandler(async (req, res) => {
     });
   } else {
     const serviceFilter = { garageId, isDeleted: false };
-    const currentGarage = await Garage.findById(garageId).select("franchiseId").lean();
-    if (currentGarage?.franchiseId) {
-      const franchise = await Franchise.findById(currentGarage.franchiseId)
-        .select("sharingPolicy.shareServices")
-        .lean();
-      if (franchise?.sharingPolicy?.shareServices) {
-        const garageIds = await Garage.distinct("_id", {
-          franchiseId: currentGarage.franchiseId,
-        });
-        serviceFilter.garageId = { $in: garageIds };
-      }
-    }
-
     categories = await GarageServiceCatalog.distinct("category", serviceFilter);
   }
 

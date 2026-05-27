@@ -11,7 +11,6 @@ const RepairOrder = require("../models/RepairOrder.model");
 const Booking = require("../models/Booking.model");
 const Vehicle = require("../models/Vehicle.model");
 const { findOrCreateOwner } = require("./owner.service");
-const { ensureFranchiseCapacity } = require("./franchiseCapacity.service");
 const {
   BadRequestError,
   NotFoundError,
@@ -41,15 +40,13 @@ function buildStatusFilter(status) {
 // List + stats
 // ─────────────────────────────────────────────────────────────────
 
-async function listGarages({ status, ownerId, franchiseId } = {}) {
+async function listGarages({ status, ownerId } = {}) {
   const filter = { ...buildStatusFilter(status) };
   if (ownerId) filter.owner = ownerId;
-  if (franchiseId) filter.franchiseId = franchiseId;
 
   const garages = await Garage.find(filter)
     .populate("owner", "fullName phoneNo emailId isVerified createdAt")
     .populate("manager", "fullName phoneNo emailId role")
-    .populate("franchiseId", "name code approvalStatus")
     .sort({ createdAt: -1 })
     .lean();
 
@@ -78,7 +75,6 @@ async function getGarageDetail(id) {
   const garage = await Garage.findById(id)
     .populate("owner", "fullName phoneNo emailId isVerified role state createdAt")
     .populate("manager", "fullName phoneNo emailId role")
-    .populate("franchiseId", "name code approvalStatus plan sharingPolicy")
     .lean();
 
   if (!garage) throw new NotFoundError("Garage not found.");
@@ -164,7 +160,6 @@ async function createGarage(input) {
     isGstApplicable,
     gstNumber,
     approvalStatus = "approved",
-    franchiseId,
     manager,
     setAsDefault = false,
   } = input || {};
@@ -173,10 +168,6 @@ async function createGarage(input) {
     throw new BadRequestError(
       "garageName, garageAddress, garageContactNumber, garageType are required.",
     );
-  }
-
-  if (franchiseId) {
-    await ensureFranchiseCapacity(franchiseId, 1);
   }
 
   const session = await mongoose.startSession();
@@ -192,9 +183,9 @@ async function createGarage(input) {
       session,
     );
 
-    if (!franchiseId && existingCount > 0) {
+    if (existingCount > 0) {
       throw new BadRequestError(
-        "This owner already has a garage. Add extra garages from a franchise only.",
+        "This owner already has a garage.",
       );
     }
 
@@ -225,7 +216,6 @@ async function createGarage(input) {
           gstNumber: isGstApplicable ? gstNumber || null : null,
           isProfileComplete: true,
           approvalStatus,
-          franchiseId: franchiseId || null,
           manager: manager || null,
           isPrimaryBranch: shouldBePrimary,
         },
@@ -241,9 +231,6 @@ async function createGarage(input) {
     if (shouldBePrimary || !owner.activeGarageId) {
       ownerUpdate.activeGarageId = garage._id;
     }
-    if (franchiseId && !owner.franchiseId) {
-      ownerUpdate.franchiseId = franchiseId;
-    }
     if (Object.keys(ownerUpdate).length) {
       await User.findByIdAndUpdate(owner._id, ownerUpdate, { session });
     }
@@ -253,7 +240,6 @@ async function createGarage(input) {
     const populated = await Garage.findById(garage._id)
       .populate("owner", "fullName phoneNo emailId isVerified")
       .populate("manager", "fullName phoneNo emailId role")
-      .populate("franchiseId", "name code approvalStatus")
       .lean();
 
     return { garage: populated, ownerWasCreated };
@@ -286,18 +272,9 @@ async function updateGarage(id, input) {
     isGstApplicable,
     gstNumber,
     approvalStatus,
-    franchiseId,
     manager,
     setAsDefault,
   } = input || {};
-
-  if (
-    franchiseId !== undefined &&
-    franchiseId &&
-    String(franchiseId) !== String(garage.franchiseId || "")
-  ) {
-    await ensureFranchiseCapacity(franchiseId, 1);
-  }
 
   // Owner-level updates (safe fields only)
   const userUpdate = {};
@@ -331,7 +308,6 @@ async function updateGarage(id, input) {
   if (garageLogo !== undefined) garage.garageLogo = garageLogo;
   if (state !== undefined) garage.state = state;
   if (approvalStatus !== undefined) garage.approvalStatus = approvalStatus;
-  if (franchiseId !== undefined) garage.franchiseId = franchiseId || null;
   if (manager !== undefined) garage.manager = manager || null;
   if (isGstApplicable !== undefined) {
     garage.isGstApplicable = !!isGstApplicable;
@@ -343,7 +319,6 @@ async function updateGarage(id, input) {
   return Garage.findById(garage._id)
     .populate("owner", "fullName phoneNo emailId isVerified")
     .populate("manager", "fullName phoneNo emailId role")
-    .populate("franchiseId", "name code approvalStatus")
     .lean();
 }
 

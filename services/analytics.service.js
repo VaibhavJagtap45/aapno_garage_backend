@@ -6,12 +6,10 @@
 //
 // Filters supported:
 //   fromDate, toDate           — ISO strings, inclusive
-//   franchiseId                — restrict to garages in this franchise
 //   garageId                   — restrict to one garage
 
 const mongoose = require("mongoose");
 const Garage = require("../models/Garage.model");
-const Franchise = require("../models/Franchise.model");
 const Booking = require("../models/Booking.model");
 const Invoice = require("../models/Invoice.model");
 const { BadRequestError } = require("../core/errors");
@@ -49,12 +47,10 @@ async function resolveScope(filters) {
     throw new BadRequestError("fromDate must be before toDate.");
   }
 
-  const franchiseId = objectId(filters.franchiseId, "franchiseId");
   const garageId = objectId(filters.garageId, "garageId");
 
   // Find the garages matching the structural filters
   const garageFilter = {};
-  if (franchiseId) garageFilter.franchiseId = franchiseId;
   if (garageId) garageFilter._id = garageId;
 
   let garageIds;
@@ -66,7 +62,7 @@ async function resolveScope(filters) {
     garageIds = null; // means "no restriction"
   }
 
-  return { fromDate, toDate: toDateVal, franchiseId, garageId, garageIds };
+  return { fromDate, toDate: toDateVal, garageId, garageIds };
 }
 
 function withScope(match, scope, garageField = "garage") {
@@ -82,10 +78,9 @@ async function computeKpis(scope) {
   const dateRange = { $gte: scope.fromDate, $lte: scope.toDate };
 
   // Counts
-  const [garageCount, franchiseCount] = await Promise.all([
-    Garage.countDocuments(scope.garageIds ? { _id: { $in: scope.garageIds } } : {}),
-    Franchise.countDocuments(),
-  ]);
+  const garageCount = await Garage.countDocuments(
+    scope.garageIds ? { _id: { $in: scope.garageIds } } : {},
+  );
 
   // Revenue + bookings within range
   const [revenueAgg, bookingCount] = await Promise.all([
@@ -115,7 +110,6 @@ async function computeKpis(scope) {
 
   return {
     garageCount,
-    franchiseCount,
     revenue: rev.revenue || 0,
     collected: rev.collected || 0,
     outstanding: Math.max(0, (rev.revenue || 0) - (rev.collected || 0)),
@@ -194,64 +188,6 @@ async function computeGarageStatusBreakdown(scope) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Top franchises (by revenue + garage count)
-// ─────────────────────────────────────────────────────────────────
-async function computeTopFranchises(scope, limit = 5) {
-  // Revenue per garage
-  const perGarage = await Invoice.aggregate([
-    {
-      $match: withScope(
-        { createdAt: { $gte: scope.fromDate, $lte: scope.toDate } },
-        scope,
-        "garageId",
-      ),
-    },
-    {
-      $group: {
-        _id: "$garageId",
-        revenue: { $sum: { $ifNull: ["$totalAmount", 0] } },
-      },
-    },
-  ]);
-  const revByGarage = new Map(perGarage.map((r) => [String(r._id), r.revenue]));
-  const garageIds = perGarage.map((r) => r._id);
-  if (garageIds.length === 0) return [];
-
-  const garages = await Garage.find({ _id: { $in: garageIds } })
-    .select("franchiseId")
-    .lean();
-
-  const totalsByFranchise = new Map();
-  for (const g of garages) {
-    const key = String(g.franchiseId || "none");
-    const prev = totalsByFranchise.get(key) || { revenue: 0, garageCount: 0 };
-    prev.revenue += revByGarage.get(String(g._id)) || 0;
-    prev.garageCount += 1;
-    totalsByFranchise.set(key, prev);
-  }
-
-  const franchiseIds = [...totalsByFranchise.keys()].filter((k) => k !== "none");
-  const franchises = await Franchise.find({ _id: { $in: franchiseIds } })
-    .select("name code")
-    .lean();
-  const fMap = new Map(franchises.map((f) => [String(f._id), f]));
-
-  const result = [...totalsByFranchise.entries()]
-    .filter(([k]) => k !== "none")
-    .map(([id, v]) => ({
-      franchiseId: id,
-      name: fMap.get(id)?.name || "Unknown",
-      code: fMap.get(id)?.code || null,
-      revenue: v.revenue,
-      garageCount: v.garageCount,
-    }))
-    .sort((a, b) => b.revenue - a.revenue)
-    .slice(0, limit);
-
-  return result;
-}
-
-// ─────────────────────────────────────────────────────────────────
 // Top garages (by revenue)
 // ─────────────────────────────────────────────────────────────────
 async function computeTopGarages(scope, limit = 5) {
@@ -276,8 +212,7 @@ async function computeTopGarages(scope, limit = 5) {
   if (rows.length === 0) return [];
 
   const garages = await Garage.find({ _id: { $in: rows.map((r) => r._id) } })
-    .select("garageName garageOwnerName franchiseId")
-    .populate("franchiseId", "name code")
+    .select("garageName garageOwnerName")
     .lean();
   const gMap = new Map(garages.map((g) => [String(g._id), g]));
 
@@ -287,9 +222,6 @@ async function computeTopGarages(scope, limit = 5) {
       garageId: r._id,
       name: g?.garageName || "—",
       ownerName: g?.garageOwnerName || null,
-      franchise: g?.franchiseId
-        ? { id: g.franchiseId._id, name: g.franchiseId.name, code: g.franchiseId.code }
-        : null,
       revenue: r.revenue,
       invoices: r.invoices,
     };
@@ -306,14 +238,12 @@ async function getAnalytics(filters = {}) {
     revenueTrend,
     bookingsByStatus,
     garageStatusBreakdown,
-    topFranchises,
     topGarages,
   ] = await Promise.all([
     computeKpis(scope),
     computeRevenueTrend(scope),
     computeBookingsByStatus(scope),
     computeGarageStatusBreakdown(scope),
-    computeTopFranchises(scope),
     computeTopGarages(scope),
   ]);
   return {
@@ -322,22 +252,19 @@ async function getAnalytics(filters = {}) {
     revenueTrend,
     bookingsByStatus,
     garageStatusBreakdown,
-    topFranchises,
     topGarages,
   };
 }
 
 async function getMeta() {
-  const [franchises, garages] = await Promise.all([
-    Franchise.find().select("_id name code").sort({ name: 1 }).lean(),
-    Garage.find().select("_id garageName franchiseId").sort({ garageName: 1 }).lean(),
-  ]);
+  const garages = await Garage.find()
+    .select("_id garageName")
+    .sort({ garageName: 1 })
+    .lean();
   return {
-    franchises: franchises.map((f) => ({ id: f._id, name: f.name, code: f.code })),
     garages: garages.map((g) => ({
       id: g._id,
       name: g.garageName,
-      franchiseId: g.franchiseId || null,
     })),
   };
 }

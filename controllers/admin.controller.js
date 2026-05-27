@@ -45,7 +45,6 @@ const getAllGarages = asyncHandler(async (req, res) => {
   const garages = await garageService.listGarages({
     status: req.query.status,
     ownerId: req.query.ownerId,
-    franchiseId: req.query.franchiseId,
   });
   return sendSuccess(res, 200, "Garages fetched", { garages });
 });

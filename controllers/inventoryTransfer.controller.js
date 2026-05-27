@@ -2,7 +2,6 @@ const mongoose = require("mongoose");
 const InventoryTransfer = require("../models/InventoryTransfer.model");
 const Inventory = require("../models/Inventry.model");
 const Garage = require("../models/Garage.model");
-const Franchise = require("../models/Franchise.model");
 const asyncHandler = require("../utils/asyncHandler");
 const { sendError, sendSuccess } = require("../utils/response.utils");
 const resolveGarageContext = require("../utils/resolveGarageContext");
@@ -34,11 +33,6 @@ const createTransfer = asyncHandler(async (req, res) => {
 
   const context = await resolveGarageContext(req.user);
   if (!context?.franchiseId) return sendError(res, 400, "Your garage is not part of a franchise.");
-
-  const franchise = await Franchise.findById(context.franchiseId).lean();
-  if (!franchise?.sharingPolicy?.allowInventoryTransfer) {
-    return sendError(res, 403, "Inventory transfer is disabled for this franchise.");
-  }
 
   const { toGarageId, fromGarageId, requestType = "send", items = [], notes } = req.body;
   const sourceGarageId = fromGarageId || context.garageId;
