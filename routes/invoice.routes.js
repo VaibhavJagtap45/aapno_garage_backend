@@ -7,6 +7,7 @@ const {
   getInvoice,
   createInvoice,
   updateInvoice,
+  setPaymentStatus,
   deleteInvoice,
   getInvoiceStats,
 } = require("../controllers/invoice.controller");
@@ -27,6 +28,9 @@ router.post("/", checkQuota("invoices"), createInvoice);
 
 // PUT  /api/v1/invoices/:id
 router.put("/:id", updateInvoice);
+
+// PATCH /api/v1/invoices/:id/payment-status
+router.patch("/:id/payment-status", setPaymentStatus);
 
 // DELETE /api/v1/invoices/:id
 router.delete("/:id", deleteInvoice);

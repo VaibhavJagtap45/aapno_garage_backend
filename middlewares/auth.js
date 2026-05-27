@@ -38,6 +38,13 @@ const protect = async (req, res, next) => {
       return res.status(401).json({ success: false, message });
     }
 
+    if (decoded.role === "superadmin") {
+      return res.status(403).json({
+        success: false,
+        message: "Admin token used on a non-admin API route.",
+      });
+    }
+
     // 3. Confirm the account still exists
     //    Exclude refreshToken — never needed downstream
     const user = await User.findById(decoded.sub).select("-refreshToken");

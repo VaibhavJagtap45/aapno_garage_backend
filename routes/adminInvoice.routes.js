@@ -6,6 +6,7 @@ const {
   getInvoice,
   createInvoice,
   updateInvoice,
+  setPaymentStatus,
   deleteInvoice,
   getInvoiceStats,
 } = require("../controllers/invoice.controller");
@@ -16,6 +17,7 @@ router.get("/stats", adminActAsGarage(), getInvoiceStats);
 router.get("/", adminActAsGarage(), listInvoices);
 router.get("/:id", adminActAsGarage(), getInvoice);
 router.post("/", adminActAsGarage(), createInvoice);
+router.patch("/:id/payment-status", adminActAsGarage(), setPaymentStatus);
 router.put("/:id", adminActAsGarage(), updateInvoice);
 router.delete("/:id", adminActAsGarage(), deleteInvoice);
 

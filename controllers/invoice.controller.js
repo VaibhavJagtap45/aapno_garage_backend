@@ -346,6 +346,53 @@ const updateInvoice = asyncHandler(async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────
+//  PATCH /api/v1/invoices/:id/payment-status
+//  Lightweight toggle — admin/owner can flip Paid/Unpaid/Partial without
+//  touching line items or inventory.
+//  Body: { paymentStatus: "paid"|"unpaid"|"partial", paidAmount?, paymentMode? }
+// ─────────────────────────────────────────────────────────────────
+const setPaymentStatus = asyncHandler(async (req, res) => {
+  const garageId = await resolveGarageId(req.user);
+  if (!garageId) return sendError(res, 404, "Garage not found.");
+
+  const { paymentStatus, paidAmount, paymentMode } = req.body;
+  const allowedStatuses = ["paid", "unpaid", "partial"];
+  if (!allowedStatuses.includes(paymentStatus)) {
+    return sendError(
+      res,
+      400,
+      `paymentStatus must be one of: ${allowedStatuses.join(", ")}.`,
+    );
+  }
+
+  const invoice = await Invoice.findOne({
+    _id: req.params.id,
+    garageId,
+    isDeleted: false,
+  });
+  if (!invoice) return sendError(res, 404, "Invoice not found.");
+
+  invoice.paymentStatus = paymentStatus;
+  invoice.paidAmount = resolvePaidAmount(
+    paymentStatus,
+    invoice.totalAmount,
+    paidAmount,
+    invoice.paidAmount,
+  );
+  if (paymentMode !== undefined) invoice.paymentMode = paymentMode;
+
+  await invoice.save();
+
+  const populated = await Invoice.findById(invoice._id)
+    .populate("customerId", "fullName phoneNo emailId")
+    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
+    .populate("repairOrderId", "orderNo status")
+    .lean();
+
+  return sendSuccess(res, 200, "Payment status updated.", { invoice: populated });
+});
+
+// ─────────────────────────────────────────────────────────────────
 //  DELETE /api/v1/invoices/:id  (soft delete)
 // ─────────────────────────────────────────────────────────────────
 const deleteInvoice = asyncHandler(async (req, res) => {
@@ -451,6 +498,7 @@ module.exports = {
   getInvoice,
   createInvoice,
   updateInvoice,
+  setPaymentStatus,
   deleteInvoice,
   getInvoiceStats,
 };

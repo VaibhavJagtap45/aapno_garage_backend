@@ -1,5 +1,6 @@
 const router = require("express").Router();
 const adminProtect = require("../middlewares/adminAuth");
+const adminActAsGarage = require("../middlewares/adminActAsGarage");
 const {
   adminLogin,
   getAllGarages,
@@ -26,6 +27,15 @@ const {
   listUsers,
   getUserStats,
 } = require("../controllers/userAdmin.controller");
+const {
+  listInvoices,
+  getInvoice,
+  createInvoice,
+  updateInvoice,
+  setPaymentStatus,
+  deleteInvoice,
+  getInvoiceStats,
+} = require("../controllers/invoice.controller");
 
 // Public
 router.post("/login", adminLogin);
@@ -41,6 +51,20 @@ router.get("/tally-export/csv", adminProtect, tallyExportCSV);
 // Users
 router.get("/users/stats", adminProtect, getUserStats);
 router.get("/users", adminProtect, listUsers);
+
+// Invoices
+router.get("/invoices/stats", adminProtect, adminActAsGarage(), getInvoiceStats);
+router.get("/invoices", adminProtect, adminActAsGarage(), listInvoices);
+router.get("/invoices/:id", adminProtect, adminActAsGarage(), getInvoice);
+router.post("/invoices", adminProtect, adminActAsGarage(), createInvoice);
+router.patch(
+  "/invoices/:id/payment-status",
+  adminProtect,
+  adminActAsGarage(),
+  setPaymentStatus,
+);
+router.put("/invoices/:id", adminProtect, adminActAsGarage(), updateInvoice);
+router.delete("/invoices/:id", adminProtect, adminActAsGarage(), deleteInvoice);
 
 // Garages
 router.get("/garages/stats", adminProtect, getGarageStats);

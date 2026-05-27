@@ -75,11 +75,12 @@ const {
   deleteUser,
 } = require("../controllers/Userlist.controller");
 
-router.use(protect, checkSubscription);
+const guarded = [protect, checkSubscription];
 
 // ── Customers ─────────────────────────────────────────────────────
 router.get(
   "/customers",
+  ...guarded,
   (req, res, next) => {
     req.targetRole = "customer"; // ← was req.query.role
     next();
@@ -89,6 +90,7 @@ router.get(
 
 router.get(
   "/members",
+  ...guarded,
   (req, res, next) => {
     req.targetRole = "member"; // ← was req.query.role
     next();
@@ -98,6 +100,7 @@ router.get(
 
 router.get(
   "/vendors",
+  ...guarded,
   (req, res, next) => {
     req.targetRole = "vendor"; // ← was req.query.role
     next();
@@ -107,18 +110,21 @@ router.get(
 
 router.get(
   "/customers/:id",
+  ...guarded,
   (req, res, next) => { req.params.userId = req.params.id; next(); },
   getUserDetail,
 );
 
 router.delete(
   "/customers/:id",
+  ...guarded,
   (req, res, next) => { req.params.userId = req.params.id; next(); },
   deleteUser,
 );
 
 router.get(
   "/members/:id",
+  ...guarded,
   (req, res, next) => {
     req.params.userId = req.params.id;
     next();
@@ -128,6 +134,7 @@ router.get(
 
 router.get(
   "/vendors/:id",
+  ...guarded,
   (req, res, next) => {
     req.params.userId = req.params.id;
     next();
