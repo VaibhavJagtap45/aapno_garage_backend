@@ -93,7 +93,7 @@ const repairOrderSchema = new mongoose.Schema(
       default: [],
     },
     // Financials
-    laborTotal: { type: Number, default: 0 },
+    servicesTotal: { type: Number, default: 0 },
     partsTotal: { type: Number, default: 0 },
     taxTotal: { type: Number, default: 0 },
     totalAmount: { type: Number, default: 0 },

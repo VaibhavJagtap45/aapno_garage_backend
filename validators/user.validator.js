@@ -122,6 +122,15 @@ const addUserSchema = z
     vehicleModel: z.string().trim().optional(),
     vehicleRegisterNo: z.string().trim().toUpperCase().optional(),
     vehiclePurchaseDate: z.string().datetime().optional(),
+    vehicleKmDriven: z.preprocess(
+      (v) => (v === "" || v === null || v === undefined ? undefined : Number(v)),
+      z
+        .number({ invalid_type_error: "Kilometers must be a number" })
+        .int("Kilometers must be a whole number")
+        .min(0, "Kilometers cannot be negative")
+        .max(9999999, "Kilometers value is too large")
+        .optional(),
+    ),
     vehicleEngineNo: z.string().trim().optional(),
     vehicleVinNo: z.string().trim().optional(),
     vehicleInsuranceProvider: z.string().trim().optional(),

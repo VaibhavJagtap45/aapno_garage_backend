@@ -154,6 +154,7 @@ const addVehicle = asyncHandler(async (req, res) => {
     vehicleModel,
     vehicleRegisterNo,
     vehiclePurchaseDate,
+    vehicleKmDriven,
     vehicleEngineNo,
     vehicleVinNo,
     vehicleInsuranceProvider,
@@ -198,6 +199,7 @@ const addVehicle = asyncHandler(async (req, res) => {
     vehicleModel,
     vehicleRegisterNo,
     vehiclePurchaseDate,
+    vehicleKmDriven,
     vehicleEngineNo,
     vehicleVinNo,
     vehicleInsuranceProvider,
@@ -280,6 +282,7 @@ const updateVehicle = asyncHandler(async (req, res) => {
     vehicleModel,
     vehicleRegisterNo,
     vehiclePurchaseDate,
+    vehicleKmDriven,
     vehicleEngineNo,
     vehicleVinNo,
     vehicleInsuranceProvider,
@@ -310,6 +313,8 @@ const updateVehicle = asyncHandler(async (req, res) => {
     vehicle.vehicleRegisterNo = vehicleRegisterNo;
   if (vehiclePurchaseDate !== undefined)
     vehicle.vehiclePurchaseDate = vehiclePurchaseDate;
+  if (vehicleKmDriven !== undefined)
+    vehicle.vehicleKmDriven = vehicleKmDriven;
   if (vehicleEngineNo !== undefined) vehicle.vehicleEngineNo = vehicleEngineNo;
   if (vehicleVinNo !== undefined) vehicle.vehicleVinNo = vehicleVinNo;
   if (vehicleInsuranceProvider !== undefined)

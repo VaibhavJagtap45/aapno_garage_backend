@@ -30,6 +30,12 @@ const VehicleSchema = new mongoose.Schema(
       type: Date,
     },
 
+    vehicleKmDriven: {
+      type: Number,
+      min: [0, "Kilometers driven cannot be negative"],
+      default: 0,
+    },
+
     vehicleEngineNo: {
       type: String,
       trim: true,

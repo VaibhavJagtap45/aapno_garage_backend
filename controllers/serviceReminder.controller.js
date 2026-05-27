@@ -32,7 +32,7 @@ const listServiceReminders = asyncHandler(async (req, res) => {
   const [reminders, total] = await Promise.all([
     ServiceReminder.find(filter)
       .populate("customerId", "fullName phoneNo emailId")
-      .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo")
+      .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
       .sort({ dueDate: 1 })
       .skip(skip)
       .limit(safeLimit)
@@ -78,7 +78,7 @@ const createServiceReminder = asyncHandler(async (req, res) => {
 
   const populated = await ServiceReminder.findById(reminder._id)
     .populate("customerId", "fullName phoneNo emailId")
-    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo")
+    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
     .lean();
 
   return sendSuccess(res, 201, "Service reminder created.", { reminder: populated });

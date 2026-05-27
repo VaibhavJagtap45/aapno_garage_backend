@@ -1,7 +1,6 @@
+const mongoose = require("mongoose");
 const Invoice = require("../models/Invoice.model");
 const RepairOrder = require("../models/RepairOrder.model");
-const Garage = require("../models/Garage.model");
-const Inventory = require("../models/Inventry.model");
 const asyncHandler = require("../utils/asyncHandler");
 const { sendSuccess, sendError } = require("../utils/response.utils");
 const escapeRegex = require("../utils/escapeRegex");
@@ -10,6 +9,8 @@ const {
   normalizeInvoicePartLines,
   computeInvoiceTotals,
 } = require("../utils/lineItemMath");
+const { assertCustomerAndVehicle } = require("../utils/assertOwnership");
+const { applyInventoryDelta } = require("../utils/inventoryTxn");
 
 function clampAmount(value, max) {
   const amount = Number(value) || 0;
@@ -23,37 +24,6 @@ function resolvePaidAmount(paymentStatus, totalAmount, paidAmount, existingPaidA
     return clampAmount(paidAmount ?? existingPaidAmount, totalAmount);
   }
   return clampAmount(paidAmount ?? existingPaidAmount, totalAmount);
-}
-
-function partQuantityMap(parts = []) {
-  const map = new Map();
-  for (const part of parts) {
-    if (!part.inventoryId) continue;
-    const key = String(part.inventoryId);
-    map.set(key, (map.get(key) || 0) + (Number(part.quantity) || 0));
-  }
-  return map;
-}
-
-async function applyInventoryDelta(garageId, previousParts = [], nextParts = []) {
-  const previous = partQuantityMap(previousParts);
-  const next = partQuantityMap(nextParts);
-  const ids = new Set([...previous.keys(), ...next.keys()]);
-  const now = new Date();
-
-  await Promise.all(
-    [...ids].map((inventoryId) => {
-      const delta = (next.get(inventoryId) || 0) - (previous.get(inventoryId) || 0);
-      if (!delta) return null;
-
-      const update = { $inc: { quantityInHand: -delta } };
-      if (delta > 0) {
-        update.$set = { lastUsedAt: now };
-      }
-
-      return Inventory.updateOne({ _id: inventoryId, garageId }, update);
-    }),
-  );
 }
 
 // ─── Helper ───────────────────────────────────────────────────────
@@ -106,7 +76,7 @@ const listInvoices = asyncHandler(async (req, res) => {
   const [invoices, total] = await Promise.all([
     Invoice.find(filter)
       .populate("customerId", "fullName phoneNo emailId")
-      .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo")
+      .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
       .populate("garageId", "garageName")
       .sort({ createdAt: -1 })
       .skip((safePage - 1) * safeLimit)
@@ -136,7 +106,7 @@ const getInvoice = asyncHandler(async (req, res) => {
     isDeleted: false,
   })
     .populate("customerId", "fullName phoneNo emailId")
-    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo")
+    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
     .populate("repairOrderId", "orderNo status")
     .lean();
 
@@ -185,6 +155,12 @@ const createInvoice = asyncHandler(async (req, res) => {
 
   if (!customerId) return sendError(res, 400, "customerId is required.");
 
+  // Tenant isolation: even after repair-order prefill, prove that the
+  // customer (and vehicle, if supplied) actually belong to this garage.
+  // Without this check a forged ObjectId from another tenant could be
+  // stamped onto a new invoice.
+  await assertCustomerAndVehicle({ customerId, vehicleId, garageId });
+
   const normalizedServices = normalizeInvoiceServiceLines(services);
   const normalizedParts = normalizeInvoicePartLines(parts);
   const totals = computeInvoiceTotals(
@@ -193,40 +169,65 @@ const createInvoice = asyncHandler(async (req, res) => {
     Number(discountAmount) || 0,
   );
 
-  const invoiceNo = await nextInvoiceNo(garageId);
+  // Invoice + inventory must succeed or fail together. Otherwise an
+  // invoice can land with parts that were never debited (or stock can
+  // be debited for an invoice that ultimately fails to save).
+  const session = await mongoose.startSession();
+  let createdId;
+  try {
+    await session.withTransaction(async () => {
+      const invoiceNo = await nextInvoiceNo(garageId);
+      const [doc] = await Invoice.create(
+        [
+          {
+            garageId,
+            invoiceNo,
+            repairOrderId: repairOrderId || null,
+            customerId,
+            vehicleId: vehicleId || null,
+            services: normalizedServices,
+            parts: normalizedParts,
+            tags,
+            servicesSubTotal: totals.servicesSubTotal,
+            partsSubTotal: totals.partsSubTotal,
+            discountAmount: totals.discountAmount,
+            taxAmount: totals.taxAmount,
+            totalAmount: totals.totalAmount,
+            paymentStatus,
+            paidAmount: resolvePaidAmount(
+              paymentStatus,
+              totals.totalAmount,
+              paidAmount,
+            ),
+            notifyCustomer,
+            notes: notes?.trim() || null,
+            paymentMode,
+            createdBy: req.user._id,
+            status: "draft",
+          },
+        ],
+        { session },
+      );
+      createdId = doc._id;
 
-  const created = await Invoice.create({
-    garageId,
-    invoiceNo,
-    repairOrderId: repairOrderId || null,
-    customerId,
-    vehicleId: vehicleId || null,
-    services: normalizedServices,
-    parts: normalizedParts,
-    tags,
-    servicesSubTotal: totals.servicesSubTotal,
-    partsSubTotal: totals.partsSubTotal,
-    discountAmount: totals.discountAmount,
-    taxAmount: totals.taxAmount,
-    totalAmount: totals.totalAmount,
-    paymentStatus,
-    paidAmount: resolvePaidAmount(paymentStatus, totals.totalAmount, paidAmount),
-    notifyCustomer,
-    notes: notes?.trim() || null,
-    paymentMode,
-    createdBy: req.user._id,
-    status: "draft",
-  });
-
-  await applyInventoryDelta(garageId, [], normalizedParts);
+      await applyInventoryDelta({
+        garageId,
+        previousParts: [],
+        nextParts: normalizedParts,
+        session,
+      });
+    });
+  } finally {
+    await session.endSession();
+  }
 
   // Legacy no-op retained for compatibility with older usage hooks.
   incrementUsage(garageId, "invoices");
 
   // Populate so the frontend can display customer & vehicle immediately
-  const invoice = await Invoice.findById(created._id)
+  const invoice = await Invoice.findById(createdId)
     .populate("customerId", "fullName phoneNo emailId")
-    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo")
+    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
     .lean();
 
   return sendSuccess(res, 201, "Invoice created.", { invoice });
@@ -250,6 +251,20 @@ const updateInvoice = asyncHandler(async (req, res) => {
     typeof part.toObject === "function" ? part.toObject() : part,
   );
   const { services, parts, discountAmount, ...rest } = req.body;
+
+  // Tenant isolation for reassigned customer/vehicle. The update path
+  // allows changing customerId/vehicleId, so we must re-verify against
+  // the current garage (not the invoice's stored garage — that's already
+  // validated by the findOne filter above).
+  if (rest.customerId !== undefined || rest.vehicleId !== undefined) {
+    const nextCustomerId = rest.customerId ?? invoice.customerId;
+    const nextVehicleId = rest.vehicleId ?? invoice.vehicleId;
+    await assertCustomerAndVehicle({
+      customerId: nextCustomerId,
+      vehicleId: nextVehicleId,
+      garageId,
+    });
+  }
 
   // If line items changed — recompute totals
   if (
@@ -302,15 +317,28 @@ const updateInvoice = asyncHandler(async (req, res) => {
     );
   }
 
-  await invoice.save();
-  if (parts !== undefined) {
-    await applyInventoryDelta(garageId, previousParts, invoice.parts);
+  // Save invoice + adjust stock in one transaction so they cannot drift.
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      await invoice.save({ session });
+      if (parts !== undefined) {
+        await applyInventoryDelta({
+          garageId,
+          previousParts,
+          nextParts: invoice.parts,
+          session,
+        });
+      }
+    });
+  } finally {
+    await session.endSession();
   }
 
   // Always return populated refs so frontend can display customer/vehicle name
   const populated = await Invoice.findById(invoice._id)
     .populate("customerId", "fullName phoneNo emailId")
-    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo")
+    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
     .populate("repairOrderId", "orderNo status")
     .lean();
 
@@ -324,14 +352,37 @@ const deleteInvoice = asyncHandler(async (req, res) => {
   const garageId = await resolveGarageId(req.user);
   if (!garageId) return sendError(res, 404, "Garage not found.");
 
-  const invoice = await Invoice.findOneAndUpdate(
-    { _id: req.params.id, garageId, isDeleted: false },
-    { isDeleted: true },
-    { returnDocument: "after" },
-  );
+  // Soft-delete + release reserved stock in one transaction. Release is
+  // always a non-negative delta (delta < 0 from inventoryTxn's POV) so
+  // the stock check never blocks, but we still want the two writes to
+  // succeed or fail together.
+  const session = await mongoose.startSession();
+  let invoice;
+  try {
+    await session.withTransaction(async () => {
+      invoice = await Invoice.findOneAndUpdate(
+        { _id: req.params.id, garageId, isDeleted: false },
+        { isDeleted: true },
+        { returnDocument: "after", session },
+      );
+      if (!invoice) {
+        // Throw to abort the transaction — the asyncHandler/global
+        // error handler will surface a 404.
+        const err = new Error("Invoice not found.");
+        err.status = 404;
+        throw err;
+      }
+      await applyInventoryDelta({
+        garageId,
+        previousParts: invoice.parts,
+        nextParts: [],
+        session,
+      });
+    });
+  } finally {
+    await session.endSession();
+  }
 
-  if (!invoice) return sendError(res, 404, "Invoice not found.");
-  await applyInventoryDelta(garageId, invoice.parts, []);
   return sendSuccess(res, 200, "Invoice deleted.");
 });
 

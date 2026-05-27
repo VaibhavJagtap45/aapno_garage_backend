@@ -27,6 +27,17 @@ const addVehicleSchema = z.object({
     .or(z.literal(""))
     .transform((v) => (v === "" ? undefined : v)),
 
+  vehicleKmDriven: z
+    .preprocess(
+      (v) => (v === "" || v === null || v === undefined ? undefined : Number(v)),
+      z
+        .number({ invalid_type_error: "Kilometers must be a number" })
+        .int("Kilometers must be a whole number")
+        .min(0, "Kilometers cannot be negative")
+        .max(9999999, "Kilometers value is too large")
+        .optional(),
+    ),
+
   vehicleEngineNo: z.string().trim().optional(),
   vehicleVinNo: z.string().trim().optional(),
 
@@ -71,6 +82,16 @@ const updateVehicleSchema = z.object({
     .optional()
     .or(z.literal(""))
     .transform((v) => (v === "" ? undefined : v)),
+  vehicleKmDriven: z
+    .preprocess(
+      (v) => (v === "" || v === null || v === undefined ? undefined : Number(v)),
+      z
+        .number({ invalid_type_error: "Kilometers must be a number" })
+        .int("Kilometers must be a whole number")
+        .min(0, "Kilometers cannot be negative")
+        .max(9999999, "Kilometers value is too large")
+        .optional(),
+    ),
   vehicleEngineNo: z.string().trim().optional(),
   vehicleVinNo: z.string().trim().optional(),
   vehicleInsuranceProvider: z.string().trim().optional(),

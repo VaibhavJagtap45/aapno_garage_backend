@@ -141,7 +141,7 @@ function computeRepairOrderTotals(services = [], parts = []) {
   );
 
   return {
-    laborTotal: servicesTotal,
+    servicesTotal,
     partsTotal,
     taxTotal,
     totalAmount: roundCurrency(servicesTotal + partsTotal),

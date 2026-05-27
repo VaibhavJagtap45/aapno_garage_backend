@@ -4,21 +4,20 @@ const User = require("../models/User.model");
 const Garage = require("../models/Garage.model");
 const GarageServiceCatalog = require("../models/GarageServiceCatalog.model");
 const Inventory = require("../models/Inventry.model");
-const { sendWhatsApp } = require("../utils/whatsapp");
 const asyncHandler = require("../utils/asyncHandler");
 const { sendSuccess, sendError } = require("../utils/response.utils");
 const resolveGarageId = require("../utils/resolveGarageId");
 const escapeRegex = require("../utils/escapeRegex");
+const { assertCustomerAndVehicle } = require("../utils/assertOwnership");
 const {
   normalizeRepairServiceLines,
   normalizeRepairPartLines,
   computeRepairOrderTotals,
 } = require("../utils/lineItemMath");
 const {
-  notifyUser,
-  notifyBoth,
-  TEMPLATES,
-} = require("../services/pushNotification.service");
+  notifyStatusTransition,
+  notifyOrderCreated,
+} = require("../services/repairOrderNotification.service");
 const incrementUsage = require("../utils/incrementUsage");
 
 async function nextOrderNo(garageId) {
@@ -295,7 +294,7 @@ const listRepairOrders = asyncHandler(async (req, res) => {
   const [orders, total] = await Promise.all([
     RepairOrder.find(filter)
       .populate("customerId", "fullName phoneNo")
-      .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo")
+      .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(safeLimit)
@@ -325,7 +324,7 @@ const getRepairOrder = asyncHandler(async (req, res) => {
     .populate("customerId", "fullName phoneNo emailId")
     .populate(
       "vehicleId",
-      "vehicleBrand vehicleModel vehicleRegisterNo vehicleVariant",
+      "vehicleBrand vehicleModel vehicleRegisterNo vehicleVariant vehicleKmDriven",
     )
     .lean();
 
@@ -360,6 +359,11 @@ const createRepairOrder = asyncHandler(async (req, res) => {
   if (!customerId) return sendError(res, 400, "customerId is required.");
   if (!vehicleId) return sendError(res, 400, "vehicleId is required.");
 
+  // Tenant isolation: prove the customer + vehicle actually belong to
+  // this garage before we let them onto a new repair order. Stops a
+  // forged ObjectId from another tenant being attached here.
+  await assertCustomerAndVehicle({ customerId, vehicleId, garageId });
+
   const { services: syncedServices, parts: syncedParts } =
     await syncManualRepairOrderItems(garageId, services, parts);
   const normalizedServices = normalizeRepairServiceLines(syncedServices);
@@ -377,7 +381,7 @@ const createRepairOrder = asyncHandler(async (req, res) => {
     parts: normalizedParts,
     applyDiscountToAllParts,
     images,
-    laborTotal: totals.laborTotal,
+    servicesTotal: totals.servicesTotal,
     partsTotal: totals.partsTotal,
     taxTotal: totals.taxTotal,
     totalAmount: totals.totalAmount,
@@ -410,24 +414,10 @@ const createRepairOrder = asyncHandler(async (req, res) => {
   // Legacy no-op retained for compatibility with older usage hooks.
   incrementUsage(garageId, "repairOrders");
 
-  // Fire-and-forget: notify customer + garage owner
-  if (customerId) {
-    (async () => {
-      try {
-        const garage = await Garage.findById(garageId).select("owner").lean();
-        const customer = await User.findById(customerId)
-          .select("fullName")
-          .lean();
-        await notifyBoth(
-          customerId,
-          garage?.owner,
-          TEMPLATES.REPAIR_ORDER_CREATED(order.orderNo),
-          TEMPLATES.OWNER_ORDER_CREATED(order.orderNo, customer?.fullName),
-        );
-      } catch (err) {
-        console.error("[Push] RO created notification failed:", err.message);
-      }
-    })();
+  // Fire-and-forget notification. The service catches its own errors —
+  // a push outage must not block the API response.
+  if (order.customerId) {
+    notifyOrderCreated({ garageId, order });
   }
 
   return sendSuccess(res, 201, "Repair order created.", { order });
@@ -498,7 +488,7 @@ const updateRepairOrder = asyncHandler(async (req, res) => {
 
     order.services = normalizedServices;
     order.parts = normalizedParts;
-    order.laborTotal = totals.laborTotal;
+    order.servicesTotal = totals.servicesTotal;
     order.partsTotal = totals.partsTotal;
     order.taxTotal = totals.taxTotal;
     order.totalAmount = totals.totalAmount;
@@ -507,78 +497,10 @@ const updateRepairOrder = asyncHandler(async (req, res) => {
 
   await order.save();
 
-  // ── Notifications on status transitions ──────────────────────────
-  //  All blocks are fire-and-forget — response is never held up.
-  //  Both customer AND garage owner are notified on every transition.
-  // ─────────────────────────────────────────────────────────────────
-
-  const statusChanged = req.body.status && req.body.status !== previousStatus;
-
-  if (statusChanged) {
-    (async () => {
-      try {
-        // One query to get garage (owner + prefs + name) and customer in parallel
-        const [garage, customer] = await Promise.all([
-          Garage.findById(garageId)
-            .select("owner preferences garageName")
-            .lean(),
-          order.customerId
-            ? User.findById(order.customerId).select("fullName phoneNo").lean()
-            : null,
-        ]);
-
-        const ownerId = garage?.owner;
-        const gName = garage?.garageName ?? "your garage";
-        const cName = customer?.fullName || "Customer";
-        const orderNo = order.orderNo;
-
-        // ── in_progress ──────────────────────────────────────────────
-        if (req.body.status === "in_progress") {
-          await notifyBoth(
-            order.customerId,
-            ownerId,
-            TEMPLATES.REPAIR_STARTED(orderNo),
-            TEMPLATES.OWNER_REPAIR_STARTED(orderNo),
-          );
-        }
-
-        // ── vehicle_ready ────────────────────────────────────────────
-        if (req.body.status === "vehicle_ready") {
-          await notifyBoth(
-            order.customerId,
-            ownerId,
-            TEMPLATES.VEHICLE_READY(orderNo, gName),
-            TEMPLATES.OWNER_VEHICLE_READY(orderNo, cName),
-          );
-
-          // WhatsApp (only when garage has enabled auto-WA)
-          if (garage?.preferences?.autoWaNotification && customer?.phoneNo) {
-            const roNo = orderNo ?? "your repair order";
-            const msg =
-              `Hi ${cName}! 🚗\n\n` +
-              `Your vehicle is ready for pickup at *${gName}*.\n` +
-              `Repair Order: *${roNo}*\n\n` +
-              `Please visit us at your earliest convenience. Thank you!`;
-            await sendWhatsApp(customer.phoneNo, msg);
-          }
-        }
-
-        // ── completed ────────────────────────────────────────────────
-        if (req.body.status === "completed") {
-          await notifyBoth(
-            order.customerId,
-            ownerId,
-            TEMPLATES.REPAIR_COMPLETED(orderNo),
-            TEMPLATES.OWNER_REPAIR_COMPLETED(orderNo),
-          );
-        }
-      } catch (err) {
-        console.error(
-          "[Push] Status transition notification failed:",
-          err.message,
-        );
-      }
-    })();
+  // Fire-and-forget. Push/WhatsApp must never block the API response;
+  // the service catches its own errors and only logs.
+  if (req.body.status && req.body.status !== previousStatus) {
+    notifyStatusTransition({ garageId, order, status: req.body.status });
   }
 
   return sendSuccess(res, 200, "Repair order updated.", { order });
@@ -640,7 +562,7 @@ const getCancelledOrders = asyncHandler(async (req, res) => {
   const [orders, total] = await Promise.all([
     RepairOrder.find(filter)
       .populate("customerId", "fullName phoneNo")
-      .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo")
+      .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(safeLimit)
@@ -679,7 +601,7 @@ const tallyExport = asyncHandler(async (req, res) => {
 
   const orders = await RepairOrder.find(filter)
     .populate("customerId", "fullName phoneNo emailId")
-    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo")
+    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
     .sort({ createdAt: 1 })
     .lean();
 
@@ -693,7 +615,7 @@ const tallyExport = asyncHandler(async (req, res) => {
       ? `${o.vehicleId.vehicleBrand ?? ""} ${o.vehicleId.vehicleModel ?? ""}`.trim()
       : "",
     status: o.status ?? "",
-    labourTotal: o.laborTotal ?? 0,
+    servicesTotal: o.servicesTotal ?? 0,
     partsTotal: o.partsTotal ?? 0,
     discountAmount: o.discountAmount ?? 0,
     taxTotal: o.taxTotal ?? 0,
@@ -761,7 +683,7 @@ const getCalendarOrders = asyncHandler(async (req, res) => {
     ],
   })
     .populate("customerId", "fullName phoneNo")
-    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo")
+    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
     .select(
       "orderNo scheduledAt estimatedDeliveryAt createdAt status customerId vehicleId services",
     )

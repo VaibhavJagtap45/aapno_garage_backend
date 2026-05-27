@@ -13,7 +13,7 @@ async function ownerGarage(userId) {
 function populateBooking(query) {
   return query
     .populate("customer", "fullName phoneNo emailId")
-    .populate("vehicle", "vehicleBrand vehicleModel vehicleRegisterNo");
+    .populate("vehicle", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven");
 }
 
 const listBookings = asyncHandler(async (req, res) => {
@@ -62,7 +62,7 @@ const listBookings = asyncHandler(async (req, res) => {
       .skip(skip)
       .limit(Number(limit))
       .populate("customer", "fullName phoneNo emailId")
-      .populate("vehicle", "vehicleBrand vehicleModel vehicleRegisterNo")
+      .populate("vehicle", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
       .lean(),
   ]);
 
@@ -107,7 +107,7 @@ const createBooking = asyncHandler(async (req, res) => {
 
   const populated = await Booking.findById(booking._id)
     .populate("customer", "fullName phoneNo emailId")
-    .populate("vehicle", "vehicleBrand vehicleModel vehicleRegisterNo")
+    .populate("vehicle", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
     .lean();
 
   (async () => {
@@ -131,7 +131,7 @@ const getBookingDetail = asyncHandler(async (req, res) => {
   const garage = await ownerGarage(req.user._id);
   const booking = await Booking.findOne({ _id: req.params.id, garage: garage?._id })
     .populate("customer", "fullName phoneNo emailId")
-    .populate("vehicle", "vehicleBrand vehicleModel vehicleRegisterNo")
+    .populate("vehicle", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
     .populate("repairOrderId", "orderNo status")
     .lean();
 
@@ -218,7 +218,7 @@ const convertToRepairOrder = asyncHandler(async (req, res) => {
 const getMyBookings = asyncHandler(async (req, res) => {
   const bookings = await Booking.find({ customer: req.user._id })
     .sort({ scheduledAt: -1 })
-    .populate("vehicle", "vehicleBrand vehicleModel vehicleRegisterNo")
+    .populate("vehicle", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
     .lean();
 
   return sendSuccess(res, 200, "Bookings fetched.", {
@@ -254,7 +254,7 @@ const createMyBooking = asyncHandler(async (req, res) => {
   });
 
   const populated = await Booking.findById(booking._id)
-    .populate("vehicle", "vehicleBrand vehicleModel vehicleRegisterNo")
+    .populate("vehicle", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
     .lean();
 
   return sendSuccess(res, 201, "Booking request sent.", { booking: populated });
@@ -297,7 +297,7 @@ const linkRepairOrder = asyncHandler(async (req, res) => {
     { returnDocument: "after" },
   )
     .populate("customer", "fullName phoneNo emailId")
-    .populate("vehicle", "vehicleBrand vehicleModel vehicleRegisterNo")
+    .populate("vehicle", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
     .populate("repairOrderId", "orderNo status")
     .lean();
 

@@ -1,2 +1,30 @@
+# ── Dependencies ──────────────────────────────────────────────────
+node_modules/
+
+# ── Environment / secrets ─────────────────────────────────────────
 .env
-/node_modules
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ── Build artifacts / bundles ─────────────────────────────────────
+*.zip
+*.tar
+*.tar.gz
+dist/
+build/
+coverage/
+
+# ── Runtime user content ──────────────────────────────────────────
+# Uploads are tenant data and must never live in version control —
+# they should be on object storage (S3 / Cloud Storage). Keep the
+# directory itself so the local dev server can write into it.
+uploads/*
+!uploads/.gitkeep
+
+# ── Logs / OS junk ────────────────────────────────────────────────
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db

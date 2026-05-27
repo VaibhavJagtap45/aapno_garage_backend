@@ -89,7 +89,7 @@ const getServices = asyncHandler(async (req, res) => {
 const getMyVehicles = asyncHandler(async (req, res) => {
   const vehicles = await Vehicle.find({ user: req.user._id })
     .select(
-      "vehicleBrand vehicleModel vehicleRegisterNo vehicleVariant vehiclePurchaseDate",
+      "vehicleBrand vehicleModel vehicleRegisterNo vehicleVariant vehiclePurchaseDate vehicleKmDriven",
     )
     .sort({ createdAt: -1 })
     .lean();
@@ -100,14 +100,29 @@ const getMyVehicles = asyncHandler(async (req, res) => {
 //  POST /api/v1/customer/vehicles
 // ─────────────────────────────────────────────────────────────────
 const addMyVehicle = asyncHandler(async (req, res) => {
-  const { vehicleBrand, vehicleModel, vehicleRegisterNo, vehicleVariant } =
-    req.body;
+  const {
+    vehicleBrand,
+    vehicleModel,
+    vehicleRegisterNo,
+    vehicleVariant,
+    vehicleKmDriven,
+  } = req.body;
   if (!vehicleBrand || !vehicleModel || !vehicleRegisterNo)
     return sendError(
       res,
       400,
       "vehicleBrand, vehicleModel, and vehicleRegisterNo are required.",
     );
+
+  // Validate km if provided
+  let kmDriven;
+  if (vehicleKmDriven !== undefined && vehicleKmDriven !== null && vehicleKmDriven !== "") {
+    const parsed = Number(vehicleKmDriven);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return sendError(res, 400, "vehicleKmDriven must be a non-negative number.");
+    }
+    kmDriven = Math.floor(parsed);
+  }
 
   const regNo = vehicleRegisterNo.toUpperCase().replace(/\s/g, "");
   const existing = await Vehicle.findOne({ vehicleRegisterNo: regNo });
@@ -124,6 +139,7 @@ const addMyVehicle = asyncHandler(async (req, res) => {
     vehicleModel: vehicleModel.trim(),
     vehicleRegisterNo: regNo,
     vehicleVariant: vehicleVariant?.trim() || null,
+    ...(kmDriven !== undefined && { vehicleKmDriven: kmDriven }),
   });
 
   return sendSuccess(res, 201, "Vehicle added.", { vehicle });
@@ -195,7 +211,7 @@ const getOrderDetail = asyncHandler(async (req, res) => {
     customerId: req.user._id,
     isDeleted: false,
   })
-    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleVariant")
+    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleVariant vehicleKmDriven")
     .populate("assignedTo", "fullName phoneNo")
     .lean();
 
@@ -317,7 +333,7 @@ const getInvoiceDetail = asyncHandler(async (req, res) => {
     customerId: req.user._id,
     isDeleted: false,
   })
-    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleVariant")
+    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleVariant vehicleKmDriven")
     .populate("repairOrderId", "orderNo status customerNote")
     .lean();
 

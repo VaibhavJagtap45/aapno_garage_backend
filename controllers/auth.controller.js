@@ -25,11 +25,15 @@ const REFRESH_COOKIE_OPTIONS = {
 // ─────────────────────────────────────────────────────────────────
 //  POST /auth/register
 //
+//  Public self-registration. New accounts default to role: "customer"
+//  and are auto-linked to the system's garage so they immediately
+//  show up in the owner's customer list.
+//
 //  Three cases handled:
 //  1. User exists + has a password  → 409 (already registered)
 //  2. User exists + no password     → set default password (migration path
 //                                     for accounts created before password auth)
-//  3. New user                      → create with default password
+//  3. New user                      → create as customer, link to garage
 // ─────────────────────────────────────────────────────────────────
 const register = asyncHandler(async (req, res) => {
   const { phoneNo } = req.body;
@@ -62,12 +66,20 @@ const register = asyncHandler(async (req, res) => {
     );
   }
 
-  // Brand new user
+  // Auto-link new customers to the system's garage. Prefer the primary
+  // branch; fall back to the oldest garage. If none exists yet, the
+  // customer is still created so registration never blocks — they just
+  // won't appear in any owner's list until a garage exists.
+  const primaryGarage =
+    (await Garage.findOne({ isPrimaryBranch: true }).select("_id").lean()) ||
+    (await Garage.findOne().sort({ createdAt: 1 }).select("_id").lean());
+
   await User.create({
     phoneNo,
     isVerified: true,
-    role: "owner",
+    role: "customer",
     password: hashedPassword,
+    garage: primaryGarage?._id ?? null,
   });
 
   return sendSuccess(
@@ -124,7 +136,14 @@ const login = asyncHandler(async (req, res) => {
 
   res.cookie("refreshToken", refreshToken, REFRESH_COOKIE_OPTIONS);
 
-  const garage = await Garage.findOne({ owner: user._id }).lean();
+  // Owners are looked up by ownership; everyone else (customer/member/vendor)
+  // resolves their garage through the user.garage pointer set at creation.
+  const garage =
+    user.role === "owner"
+      ? await Garage.findOne({ owner: user._id }).lean()
+      : user.garage
+        ? await Garage.findById(user.garage).lean()
+        : null;
 
   return sendSuccess(res, 200, "Login successful", {
     accessToken,

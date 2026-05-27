@@ -173,12 +173,6 @@ const serviceSchema = new mongoose.Schema(
       default: [],
     },
 
-    laborCharge: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-
     discountAmount: {
       type: Number,
       default: 0,

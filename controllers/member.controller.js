@@ -134,7 +134,7 @@ const getOrderDetail = asyncHandler(async (req, res) => {
     .populate("customerId", "fullName phoneNo emailId")
     .populate(
       "vehicleId",
-      "vehicleBrand vehicleModel vehicleRegisterNo vehicleVariant",
+      "vehicleBrand vehicleModel vehicleRegisterNo vehicleVariant vehicleKmDriven",
     )
     .populate("assignedTo", "fullName phoneNo")
     .lean();
@@ -238,62 +238,6 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
 //  Replace the parts array on the order and recompute totals
 //  Body: { parts: [{ inventoryId?, partCode?, name, quantity, unitPrice, discount, taxPercent }] }
 // ─────────────────────────────────────────────────────────────────
-// const updateOrderParts = asyncHandler(async (req, res) => {
-//   const garageId = req.user.garage;
-//   const { parts } = req.body;
-
-//   if (!Array.isArray(parts))
-//     return sendError(res, 400, "parts must be an array.");
-
-//   const order = await RepairOrder.findOne({
-//     _id: req.params.id,
-//     garageId,
-//     isDeleted: false,
-//   });
-
-//   if (!order) return sendError(res, 404, "Order not found.");
-//   if (!["in_progress", "vehicle_ready"].includes(order.status)) {
-//     return sendError(
-//       res,
-//       400,
-//       "Parts can only be updated on in_progress or vehicle_ready orders.",
-//     );
-//   }
-
-//   const partLines = parts.map((p) => {
-//     const unitPrice = Math.max(Number(p.unitPrice) || 0, 0);
-//     const quantity = Math.max(Number(p.quantity) || 1, 1);
-//     const discount = Math.max(Number(p.discount) || 0, 0);
-//     const taxPercent = Math.max(Number(p.taxPercent) || 0, 0);
-//     const subtotal = unitPrice * quantity - discount;
-//     const lineTotal = Math.max(subtotal + (subtotal * taxPercent) / 100, 0);
-//     return {
-//       inventoryId: p.inventoryId || null,
-//       partCode: p.partCode || null,
-//       name: String(p.name || "Part"),
-//       quantity,
-//       unitPrice,
-//       discount,
-//       taxPercent,
-//       lineTotal,
-//     };
-//   });
-
-//   const partsTotal = partLines.reduce((s, p) => s + p.lineTotal, 0);
-//   const laborTotal = order.laborTotal || 0;
-//   const taxTotal = partLines.reduce((s, p) => {
-//     const sub = p.unitPrice * p.quantity - p.discount;
-//     return s + (sub * p.taxPercent) / 100;
-//   }, 0);
-
-//   order.parts = partLines;
-//   order.partsTotal = partsTotal;
-//   order.taxTotal = taxTotal;
-//   order.totalAmount = laborTotal + partsTotal;
-//   await order.save();
-
-//   return sendSuccess(res, 200, "Parts updated.", { order });
-// });
 const updateOrderParts = asyncHandler(async (req, res) => {
   const garageId = req.user.garage;
   const { parts } = req.body;
@@ -391,7 +335,10 @@ const updateOrderParts = asyncHandler(async (req, res) => {
   );
 
   const partsTotal = partLines.reduce((s, p) => s + p.lineTotal, 0);
-  const laborTotal = order.laborTotal || 0;
+  const servicesTotal = (order.services || []).reduce(
+    (s, line) => s + (Number(line?.lineTotal) || 0),
+    0,
+  );
   const taxTotal = partLines.reduce((s, p) => {
     const sub = p.unitPrice * p.quantity - p.discount;
     return s + (sub * p.taxPercent) / 100;
@@ -399,8 +346,9 @@ const updateOrderParts = asyncHandler(async (req, res) => {
 
   order.parts = partLines;
   order.partsTotal = partsTotal;
+  order.servicesTotal = servicesTotal;
   order.taxTotal = taxTotal;
-  order.totalAmount = laborTotal + partsTotal;
+  order.totalAmount = servicesTotal + partsTotal;
   await order.save();
 
   return sendSuccess(res, 200, "Parts updated.", { order });
