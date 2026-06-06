@@ -13,6 +13,7 @@ const {
   normalizeRepairServiceLines,
   normalizeRepairPartLines,
   computeRepairOrderTotals,
+  computeRepairOrderTotalsWithDiscount,
 } = require("../utils/lineItemMath");
 const {
   notifyStatusTransition,
@@ -33,6 +34,64 @@ async function nextOrderNo(garageId) {
     : 0;
   return `RO-${String(lastNum + 1).padStart(5, "0")}`;
 }
+
+// ─────────────────────────────────────────────────────────────────
+//  POST /api/v1/repair-orders/resolve-customer
+//  Smart customer resolution: check if customer exists (by phone/email)
+//  If exists: return customer + all their vehicles (for selection/add new vehicle)
+//  If new: return success signal with customer creation payload
+//  This enables seamless "already exists? add vehicle instead" UX pattern.
+// ─────────────────────────────────────────────────────────────────
+const resolveCustomer = asyncHandler(async (req, res) => {
+  const { phoneNo, emailId, fullName } = req.body;
+
+  // At least one identifier must be provided
+  if (!phoneNo && !emailId && !fullName) {
+    return sendError(res, 400, "Provide phoneNo, emailId, or fullName to resolve customer.");
+  }
+
+  // Build search conditions — match by phone or email (primary), then name fallback
+  const searchConditions = [];
+  if (phoneNo?.trim()) searchConditions.push({ phoneNo: phoneNo.trim() });
+  if (emailId?.trim()) searchConditions.push({ emailId: emailId.toLowerCase().trim() });
+  if (fullName?.trim()) {
+    const nameRx = new RegExp(`^${escapeRegex(fullName.trim())}$`, "i");
+    searchConditions.push({ fullName: nameRx });
+  }
+
+  if (searchConditions.length === 0) {
+    return sendSuccess(res, 200, "New customer (no identifiers).", {
+      isExisting: false,
+      customer: null,
+      vehicles: [],
+    });
+  }
+
+  // Try to find existing customer
+  const existingCustomer = await User.findOne({ $or: searchConditions })
+    .select("_id fullName phoneNo emailId")
+    .lean();
+
+  if (!existingCustomer) {
+    // Customer doesn't exist
+    return sendSuccess(res, 200, "New customer.", {
+      isExisting: false,
+      customer: null,
+      vehicles: [],
+    });
+  }
+
+  // Customer exists — fetch all their vehicles
+  const vehicles = await Vehicle.find({ user: existingCustomer._id })
+    .select("_id vehicleBrand vehicleModel vehicleRegisterNo")
+    .lean();
+
+  return sendSuccess(res, 200, "Existing customer found.", {
+    isExisting: true,
+    customer: existingCustomer,
+    vehicles: vehicles || [],
+  });
+});
 
 // ─────────────────────────────────────────────────────────────────
 //  GET /api/v1/repair-orders/search-customers?q=John
@@ -354,6 +413,9 @@ const createRepairOrder = asyncHandler(async (req, res) => {
     scheduledAt,
     estimatedDeliveryAt,
     notifyCustomer = false,
+    discountAmount = 0,
+    discountType = "rupees",
+    discountPercent = 0,
   } = req.body;
 
   if (!customerId) return sendError(res, 400, "customerId is required.");
@@ -368,7 +430,22 @@ const createRepairOrder = asyncHandler(async (req, res) => {
     await syncManualRepairOrderItems(garageId, services, parts);
   const normalizedServices = normalizeRepairServiceLines(syncedServices);
   const normalizedParts = normalizeRepairPartLines(syncedParts);
-  const totals = computeRepairOrderTotals(normalizedServices, normalizedParts);
+  
+  // Determine discount value based on type
+  let discountValue = 0;
+  const type = String(discountType || "rupees").toLowerCase();
+  if (type === "percentage") {
+    discountValue = Number(discountPercent) || 0;
+  } else {
+    discountValue = Number(discountAmount) || 0;
+  }
+  
+  const totals = computeRepairOrderTotalsWithDiscount(
+    normalizedServices,
+    normalizedParts,
+    type,
+    discountValue,
+  );
 
   const payload = {
     garageId,
@@ -385,7 +462,9 @@ const createRepairOrder = asyncHandler(async (req, res) => {
     partsTotal: totals.partsTotal,
     taxTotal: totals.taxTotal,
     totalAmount: totals.totalAmount,
-    discountAmount: totals.discountAmount,
+    discountAmount: totals.appliedDiscount,
+    discountType: type,
+    discountPercent: type === "percentage" ? discountValue : 0,
     tags,
     customerRemarks,
     scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
@@ -453,6 +532,9 @@ const updateRepairOrder = asyncHandler(async (req, res) => {
     "vehicleVariant",
     "assignedTo", // owner assigns a mechanic (member)
     "assignedAt",
+    "discountAmount",
+    "discountType",
+    "discountPercent",
   ];
 
   const previousStatus = order.status;
@@ -463,7 +545,13 @@ const updateRepairOrder = asyncHandler(async (req, res) => {
     order[k] = req.body[k];
   });
 
-  if (req.body.services !== undefined || req.body.parts !== undefined) {
+  if (
+    req.body.services !== undefined ||
+    req.body.parts !== undefined ||
+    req.body.discountAmount !== undefined ||
+    req.body.discountType !== undefined ||
+    req.body.discountPercent !== undefined
+  ) {
     const rawServices =
       req.body.services !== undefined
         ? req.body.services
@@ -481,9 +569,23 @@ const updateRepairOrder = asyncHandler(async (req, res) => {
       await syncManualRepairOrderItems(garageId, rawServices, rawParts);
     const normalizedServices = normalizeRepairServiceLines(syncedServices);
     const normalizedParts = normalizeRepairPartLines(syncedParts);
-    const totals = computeRepairOrderTotals(
+    
+    // Determine discount value based on type
+    const type = String(
+      req.body.discountType ?? order.discountType ?? "rupees"
+    ).toLowerCase();
+    let discountValue = 0;
+    if (type === "percentage") {
+      discountValue = Number(req.body.discountPercent ?? order.discountPercent) || 0;
+    } else {
+      discountValue = Number(req.body.discountAmount ?? order.discountAmount) || 0;
+    }
+    
+    const totals = computeRepairOrderTotalsWithDiscount(
       normalizedServices,
       normalizedParts,
+      type,
+      discountValue,
     );
 
     order.services = normalizedServices;
@@ -492,7 +594,9 @@ const updateRepairOrder = asyncHandler(async (req, res) => {
     order.partsTotal = totals.partsTotal;
     order.taxTotal = totals.taxTotal;
     order.totalAmount = totals.totalAmount;
-    order.discountAmount = totals.discountAmount;
+    order.discountAmount = totals.appliedDiscount;
+    order.discountType = type;
+    order.discountPercent = type === "percentage" ? discountValue : 0;
   }
 
   await order.save();
@@ -890,6 +994,7 @@ async function syncManualRepairOrderItems(garageId, services = [], parts = []) {
 }
 
 module.exports = {
+  resolveCustomer,
   searchCustomers,
   searchVehicleByRegNo,
   listRepairOrders,

@@ -5,9 +5,11 @@
 
 const jwt = require("jsonwebtoken");
 const asyncHandler = require("../utils/asyncHandler");
-const { sendSuccess } = require("../utils/response.utils");
+const { sendSuccess, sendError } = require("../utils/response.utils");
 const garageService = require("../services/garage.service");
 const VehicleMeta = require("../models/VehicleMeta.model");
+const User = require("../models/User.model");
+const Vehicle = require("../models/Vehicle.model");
 const { VEHICLE_TYPES } = require("../models/VehicleMeta.model");
 const escapeRegex = require("../utils/escapeRegex");
 const { BadRequestError, UnauthorizedError } = require("../core/errors");
@@ -191,6 +193,69 @@ const rejectGarage = asyncHandler(async (req, res) => {
   return sendSuccess(res, 200, "Garage rejected", { garage });
 });
 
+// ─────────────────────────────────────────────────────────────────
+//  POST /api/v1/admin/customers/:customerId/vehicles
+//  Garage owner/admin adds a vehicle for an existing customer
+//  Used in repair order workflow when customer has no vehicles
+// ─────────────────────────────────────────────────────────────────
+const addVehicleForCustomer = asyncHandler(async (req, res) => {
+  const { customerId } = req.params;
+  const {
+    vehicleBrand,
+    vehicleModel,
+    vehicleRegisterNo,
+    vehicleVariant,
+    vehicleKmDriven,
+  } = req.body;
+
+  if (!vehicleBrand || !vehicleModel || !vehicleRegisterNo) {
+    return sendError(
+      res,
+      400,
+      "vehicleBrand, vehicleModel, and vehicleRegisterNo are required.",
+    );
+  }
+
+  // Verify customer exists
+  const customer = await User.findById(customerId);
+  if (!customer) {
+    return sendError(res, 404, "Customer not found.");
+  }
+
+  // Check for duplicate registration number (case-insensitive)
+  const regNo = vehicleRegisterNo.toUpperCase().replace(/\s/g, "");
+  const existing = await Vehicle.findOne({ vehicleRegisterNo: regNo });
+  if (existing) {
+    return sendError(
+      res,
+      409,
+      "A vehicle with this registration number already exists.",
+    );
+  }
+
+  // Validate km if provided
+  let kmDriven;
+  if (vehicleKmDriven !== undefined && vehicleKmDriven !== null && vehicleKmDriven !== "") {
+    const parsed = Number(vehicleKmDriven);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return sendError(res, 400, "vehicleKmDriven must be a non-negative number.");
+    }
+    kmDriven = Math.floor(parsed);
+  }
+
+  // Create vehicle for customer
+  const vehicle = await Vehicle.create({
+    user: customerId,
+    vehicleBrand: vehicleBrand.trim(),
+    vehicleModel: vehicleModel.trim(),
+    vehicleRegisterNo: regNo,
+    vehicleVariant: vehicleVariant?.trim() || null,
+    ...(kmDriven !== undefined && { vehicleKmDriven: kmDriven }),
+  });
+
+  return sendSuccess(res, 201, "Vehicle added for customer.", { vehicle });
+});
+
 module.exports = {
   adminLogin,
   getAllGarages,
@@ -204,4 +269,5 @@ module.exports = {
   deleteGarage,
   approveGarage,
   rejectGarage,
+  addVehicleForCustomer,
 };

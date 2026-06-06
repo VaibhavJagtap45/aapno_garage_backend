@@ -8,6 +8,7 @@ const {
   normalizeInvoiceServiceLines,
   normalizeInvoicePartLines,
   computeInvoiceTotals,
+  computeInvoiceTotalsWithDiscount,
 } = require("../utils/lineItemMath");
 const { assertCustomerAndVehicle } = require("../utils/assertOwnership");
 const { applyInventoryDelta } = require("../utils/inventoryTxn");
@@ -130,6 +131,8 @@ const createInvoice = asyncHandler(async (req, res) => {
     parts = [],
     tags = [],
     discountAmount = 0,
+    discountType = "rupees",
+    discountPercent = 0,
     paidAmount = 0,
     paymentStatus = "unpaid",
     notifyCustomer = false,
@@ -163,10 +166,21 @@ const createInvoice = asyncHandler(async (req, res) => {
 
   const normalizedServices = normalizeInvoiceServiceLines(services);
   const normalizedParts = normalizeInvoicePartLines(parts);
-  const totals = computeInvoiceTotals(
+  
+  // Determine discount value based on type
+  let discountValue = 0;
+  const type = String(discountType || "rupees").toLowerCase();
+  if (type === "percentage") {
+    discountValue = Number(discountPercent) || 0;
+  } else {
+    discountValue = Number(discountAmount) || 0;
+  }
+  
+  const totals = computeInvoiceTotalsWithDiscount(
     normalizedServices,
     normalizedParts,
-    Number(discountAmount) || 0,
+    type,
+    discountValue,
   );
 
   // Invoice + inventory must succeed or fail together. Otherwise an
@@ -191,6 +205,8 @@ const createInvoice = asyncHandler(async (req, res) => {
             servicesSubTotal: totals.servicesSubTotal,
             partsSubTotal: totals.partsSubTotal,
             discountAmount: totals.discountAmount,
+            discountType: type,
+            discountPercent: type === "percentage" ? discountValue : 0,
             taxAmount: totals.taxAmount,
             totalAmount: totals.totalAmount,
             paymentStatus,
@@ -250,7 +266,7 @@ const updateInvoice = asyncHandler(async (req, res) => {
   const previousParts = invoice.parts.map((part) =>
     typeof part.toObject === "function" ? part.toObject() : part,
   );
-  const { services, parts, discountAmount, ...rest } = req.body;
+  const { services, parts, discountAmount, discountType, discountPercent, ...rest } = req.body;
 
   // Tenant isolation for reassigned customer/vehicle. The update path
   // allows changing customerId/vehicleId, so we must re-verify against
@@ -270,19 +286,31 @@ const updateInvoice = asyncHandler(async (req, res) => {
   if (
     services !== undefined ||
     parts !== undefined ||
-    discountAmount !== undefined
+    discountAmount !== undefined ||
+    discountType !== undefined ||
+    discountPercent !== undefined
   ) {
     const newServices = normalizeInvoiceServiceLines(services ?? invoice.services);
     const newParts = normalizeInvoicePartLines(parts ?? invoice.parts);
-    const dis = Number(discountAmount ?? invoice.discountAmount) || 0;
+    
+    // Determine discount value based on type
+    const type = String(discountType ?? invoice.discountType ?? "rupees").toLowerCase();
+    let discountValue = 0;
+    if (type === "percentage") {
+      discountValue = Number(discountPercent ?? invoice.discountPercent) || 0;
+    } else {
+      discountValue = Number(discountAmount ?? invoice.discountAmount) || 0;
+    }
 
-    const totals = computeInvoiceTotals(newServices, newParts, dis);
+    const totals = computeInvoiceTotalsWithDiscount(newServices, newParts, type, discountValue);
     Object.assign(invoice, {
       services: newServices,
       parts: newParts,
       servicesSubTotal: totals.servicesSubTotal,
       partsSubTotal: totals.partsSubTotal,
       discountAmount: totals.discountAmount,
+      discountType: type,
+      discountPercent: type === "percentage" ? discountValue : 0,
       taxAmount: totals.taxAmount,
       totalAmount: totals.totalAmount,
     });

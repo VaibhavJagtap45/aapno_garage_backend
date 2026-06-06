@@ -216,11 +216,113 @@ function computeInvoiceTotals(services = [], parts = [], discountAmount = 0) {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────
+//  Calculate discount amount based on type (rupees or percentage)
+//  Returns the actual discount amount in rupees to deduct
+// ─────────────────────────────────────────────────────────────────
+function calculateDiscount(discountType, discountValue, subtotal) {
+  const type = String(discountType || "rupees").toLowerCase();
+  const value = Number(discountValue) || 0;
+
+  if (type === "percentage") {
+    // Percentage: calculate X% of subtotal
+    const percentage = Math.min(Math.max(value, 0), 100); // Clamp 0-100%
+    return roundCurrency((subtotal * percentage) / 100);
+  }
+
+  // Rupees (default): direct amount
+  return roundCurrency(Math.max(value, 0));
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  Compute totals with discount type awareness
+// ─────────────────────────────────────────────────────────────────
+function computeRepairOrderTotalsWithDiscount(
+  services = [],
+  parts = [],
+  discountType = "rupees",
+  discountValue = 0
+) {
+  const servicesTotal = roundCurrency(
+    services.reduce((sum, line) => sum + (Number(line?.lineTotal) || 0), 0),
+  );
+  const partsTotal = roundCurrency(
+    parts.reduce((sum, line) => sum + (Number(line?.lineTotal) || 0), 0),
+  );
+
+  const taxTotal = roundCurrency(
+    [
+      ...services.map((line) => {
+        const taxableAmount = roundCurrency((Number(line?.price) || 0) - (Number(line?.discount) || 0));
+        return computeTaxAmount(taxableAmount, roundPercent(line?.taxPercent));
+      }),
+      ...parts.map((line) => {
+        const grossAmount = roundCurrency((Number(line?.unitPrice) || 0) * Math.max(Number(line?.quantity) || 1, 1));
+        const taxableAmount = roundCurrency(grossAmount - (Number(line?.discount) || 0));
+        return computeTaxAmount(taxableAmount, roundPercent(line?.taxPercent));
+      }),
+    ].reduce((sum, value) => sum + value, 0),
+  );
+
+  const lineItemDiscount = roundCurrency(
+    [...services, ...parts].reduce((sum, line) => sum + (Number(line?.discount) || 0), 0),
+  );
+
+  const subtotal = roundCurrency(servicesTotal + partsTotal + taxTotal);
+  const appliedDiscount = calculateDiscount(discountType, discountValue, subtotal);
+  const totalDiscount = roundCurrency(lineItemDiscount + appliedDiscount);
+
+  return {
+    servicesTotal,
+    partsTotal,
+    taxTotal,
+    lineItemDiscount,
+    appliedDiscount,
+    totalAmount: Math.max(roundCurrency(subtotal - appliedDiscount), 0),
+    discountAmount: totalDiscount,
+  };
+}
+
+function computeInvoiceTotalsWithDiscount(
+  services = [],
+  parts = [],
+  discountType = "rupees",
+  discountValue = 0
+) {
+  const servicesSubTotal = roundCurrency(
+    services.reduce((sum, line) => sum + (Number(line?.lineTotal) || 0), 0),
+  );
+  const partsSubTotal = roundCurrency(
+    parts.reduce((sum, line) => sum + (Number(line?.lineTotal) || 0), 0),
+  );
+  const taxAmount = roundCurrency(
+    [...services, ...parts].reduce(
+      (sum, line) =>
+        sum + computeTaxAmount(Number(line?.lineTotal) || 0, roundPercent(line?.taxPercent)),
+      0,
+    ),
+  );
+
+  const subtotal = roundCurrency(servicesSubTotal + partsSubTotal + taxAmount);
+  const appliedDiscount = calculateDiscount(discountType, discountValue, subtotal);
+
+  return {
+    servicesSubTotal,
+    partsSubTotal,
+    taxAmount,
+    discountAmount: appliedDiscount,
+    totalAmount: Math.max(roundCurrency(subtotal - appliedDiscount), 0),
+  };
+}
+
 module.exports = {
   normalizeRepairServiceLines,
   normalizeRepairPartLines,
   computeRepairOrderTotals,
+  computeRepairOrderTotalsWithDiscount,
   normalizeInvoiceServiceLines,
   normalizeInvoicePartLines,
   computeInvoiceTotals,
+  computeInvoiceTotalsWithDiscount,
+  calculateDiscount,
 };

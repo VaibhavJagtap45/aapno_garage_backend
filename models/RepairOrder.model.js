@@ -98,6 +98,12 @@ const repairOrderSchema = new mongoose.Schema(
     taxTotal: { type: Number, default: 0 },
     totalAmount: { type: Number, default: 0 },
     discountAmount: { type: Number, default: 0 },
+    discountType: {
+      type: String,
+      enum: ["rupees", "percentage"],
+      default: "rupees",
+    },
+    discountPercent: { type: Number, default: 0, min: 0, max: 100 },
     // Tags (string array)
     tags: { type: [String], default: [] },
     // Customer remarks

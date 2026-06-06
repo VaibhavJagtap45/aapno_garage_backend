@@ -4,6 +4,7 @@ const protect = require("../middlewares/auth");
 const checkSubscription = require("../middlewares/checkSubscription");
 const checkQuota = require("../middlewares/checkQuota");
 const {
+  resolveCustomer,
   searchCustomers,
   searchVehicleByRegNo,
   listRepairOrders,
@@ -18,6 +19,10 @@ const {
 } = require("../controllers/RepairOrder.controller");
 
 router.use(protect, checkSubscription);
+
+// POST /api/v1/repair-orders/resolve-customer
+// Smart customer resolution: check if exists, return their vehicles
+router.post("/resolve-customer", resolveCustomer);
 
 // GET  /api/v1/repair-orders/search-customers?q=John
 router.get("/search-customers", searchCustomers);

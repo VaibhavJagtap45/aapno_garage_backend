@@ -14,6 +14,7 @@ const {
   deleteGarage,
   approveGarage,
   rejectGarage,
+  addVehicleForCustomer,
 } = require("../controllers/admin.controller");
 const {
   getAnalytics,
@@ -80,5 +81,8 @@ router.patch("/garages/:id/reject", adminProtect, rejectGarage);
 router.get("/vehicle-meta", adminProtect, getVehicleMeta);
 router.post("/vehicle-meta/brand", adminProtect, addVehicleBrand);
 router.post("/vehicle-meta/model", adminProtect, addVehicleModel);
+
+// Customer vehicle management
+router.post("/customers/:customerId/vehicles", adminProtect, addVehicleForCustomer);
 
 module.exports = router;

@@ -68,6 +68,12 @@ const invoiceSchema = new mongoose.Schema(
     servicesSubTotal: { type: Number, default: 0 },
     partsSubTotal: { type: Number, default: 0 },
     discountAmount: { type: Number, default: 0 },
+    discountType: {
+      type: String,
+      enum: ["rupees", "percentage"],
+      default: "rupees",
+    },
+    discountPercent: { type: Number, default: 0, min: 0, max: 100 },
     taxAmount: { type: Number, default: 0 },
     totalAmount: { type: Number, default: 0 },
     paidAmount: { type: Number, default: 0, min: 0 },
