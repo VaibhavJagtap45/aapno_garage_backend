@@ -2,6 +2,11 @@ const ServiceReminder = require("../models/ServiceReminder.model");
 const asyncHandler = require("../utils/asyncHandler");
 const { sendSuccess, sendError } = require("../utils/response.utils");
 const resolveGarageId = require("../utils/resolveGarageId");
+const {
+  predictDueDate,
+  sendReminder,
+  loadContext,
+} = require("../services/customerReminder.service");
 
 // ─────────────────────────────────────────────────────────────────
 //  GET /api/v1/service-reminders?tab=due|overdue|done&page=1&limit=50
@@ -62,17 +67,51 @@ const createServiceReminder = asyncHandler(async (req, res) => {
   const garageId = await resolveGarageId(req.user);
   if (!garageId) return sendError(res, 404, "Garage not found.");
 
-  const { customerId, vehicleId, repairOrderId, reminderType, dueDate, notes } = req.body;
+  const {
+    customerId,
+    vehicleId,
+    repairOrderId,
+    invoiceId,
+    reminderType,
+    serviceLabel,
+    currentOdometer,
+    nextServiceKm,
+    dailyRunningKm,
+    dueDate,
+    channels,
+    notifyDaysBefore,
+    notes,
+  } = req.body;
   if (!customerId) return sendError(res, 400, "customerId is required.");
-  if (!dueDate)    return sendError(res, 400, "dueDate is required.");
+
+  // dueDate is optional when enough km signal is present to predict it.
+  const canSchedule = Boolean(dueDate) || nextServiceKm != null;
+  const resolvedDue = canSchedule
+    ? predictDueDate({
+        currentKm: currentOdometer,
+        nextServiceKm,
+        dailyRunningKm,
+        explicitDueDate: dueDate,
+      })
+    : null;
+  if (!resolvedDue) {
+    return sendError(res, 400, "Provide a dueDate or nextServiceKm to schedule the reminder.");
+  }
 
   const reminder = await ServiceReminder.create({
     garageId,
     customerId,
     vehicleId:      vehicleId      || null,
     repairOrderId:  repairOrderId  || null,
+    invoiceId:      invoiceId      || null,
     reminderType:   reminderType   || "service",
-    dueDate:        new Date(dueDate),
+    serviceLabel:   serviceLabel?.trim() || "",
+    currentOdometer: currentOdometer != null ? Number(currentOdometer) : null,
+    nextServiceKm:   nextServiceKm   != null ? Number(nextServiceKm)   : null,
+    dailyRunningKm:  dailyRunningKm  != null ? Number(dailyRunningKm)  : null,
+    dueDate:        resolvedDue,
+    channels:       Array.isArray(channels) && channels.length ? channels : undefined,
+    notifyDaysBefore: notifyDaysBefore != null ? Number(notifyDaysBefore) : undefined,
     notes:          notes?.trim()  || "",
   });
 
@@ -105,6 +144,38 @@ const markServiceReminderDone = asyncHandler(async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────
+//  POST /api/v1/service-reminders/:id/send
+//  Dispatch a reminder immediately on its configured channels (WhatsApp +
+//  push), independent of the scheduler. Useful for a manual "Notify now".
+// ─────────────────────────────────────────────────────────────────
+const sendServiceReminderNow = asyncHandler(async (req, res) => {
+  const garageId = await resolveGarageId(req.user);
+  if (!garageId) return sendError(res, 404, "Garage not found.");
+
+  const reminder = await ServiceReminder.findOne({
+    _id: req.params.id,
+    garageId,
+    isDeleted: false,
+  });
+  if (!reminder) return sendError(res, 404, "Reminder not found.");
+
+  const ctx = await loadContext({
+    garageId,
+    customerId: reminder.customerId,
+    vehicleId: reminder.vehicleId,
+  });
+  const { ok, errors } = await sendReminder(reminder, ctx);
+
+  reminder.notifyStatus = ok ? "sent" : "failed";
+  reminder.notifiedAt = ok ? new Date() : reminder.notifiedAt;
+  reminder.lastError = ok ? null : errors.join("; ");
+  await reminder.save();
+
+  if (!ok) return sendError(res, 502, `Failed to send reminder: ${errors.join("; ")}`);
+  return sendSuccess(res, 200, "Reminder sent.", { reminder });
+});
+
+// ─────────────────────────────────────────────────────────────────
 //  DELETE /api/v1/service-reminders/:id
 // ─────────────────────────────────────────────────────────────────
 const deleteServiceReminder = asyncHandler(async (req, res) => {
@@ -128,5 +199,6 @@ module.exports = {
   listServiceReminders,
   createServiceReminder,
   markServiceReminderDone,
+  sendServiceReminderNow,
   deleteServiceReminder,
 };

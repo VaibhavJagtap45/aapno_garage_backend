@@ -47,13 +47,18 @@ const resolveCustomer = asyncHandler(async (req, res) => {
 
   // At least one identifier must be provided
   if (!phoneNo && !emailId && !fullName) {
-    return sendError(res, 400, "Provide phoneNo, emailId, or fullName to resolve customer.");
+    return sendError(
+      res,
+      400,
+      "Provide phoneNo, emailId, or fullName to resolve customer.",
+    );
   }
 
   // Build search conditions — match by phone or email (primary), then name fallback
   const searchConditions = [];
   if (phoneNo?.trim()) searchConditions.push({ phoneNo: phoneNo.trim() });
-  if (emailId?.trim()) searchConditions.push({ emailId: emailId.toLowerCase().trim() });
+  if (emailId?.trim())
+    searchConditions.push({ emailId: emailId.toLowerCase().trim() });
   if (fullName?.trim()) {
     const nameRx = new RegExp(`^${escapeRegex(fullName.trim())}$`, "i");
     searchConditions.push({ fullName: nameRx });
@@ -353,7 +358,10 @@ const listRepairOrders = asyncHandler(async (req, res) => {
   const [orders, total] = await Promise.all([
     RepairOrder.find(filter)
       .populate("customerId", "fullName phoneNo")
-      .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
+      .populate(
+        "vehicleId",
+        "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven",
+      )
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(safeLimit)
@@ -430,7 +438,7 @@ const createRepairOrder = asyncHandler(async (req, res) => {
     await syncManualRepairOrderItems(garageId, services, parts);
   const normalizedServices = normalizeRepairServiceLines(syncedServices);
   const normalizedParts = normalizeRepairPartLines(syncedParts);
-  
+
   // Determine discount value based on type
   let discountValue = 0;
   const type = String(discountType || "rupees").toLowerCase();
@@ -439,7 +447,7 @@ const createRepairOrder = asyncHandler(async (req, res) => {
   } else {
     discountValue = Number(discountAmount) || 0;
   }
-  
+
   const totals = computeRepairOrderTotalsWithDiscount(
     normalizedServices,
     normalizedParts,
@@ -569,18 +577,20 @@ const updateRepairOrder = asyncHandler(async (req, res) => {
       await syncManualRepairOrderItems(garageId, rawServices, rawParts);
     const normalizedServices = normalizeRepairServiceLines(syncedServices);
     const normalizedParts = normalizeRepairPartLines(syncedParts);
-    
+
     // Determine discount value based on type
     const type = String(
-      req.body.discountType ?? order.discountType ?? "rupees"
+      req.body.discountType ?? order.discountType ?? "rupees",
     ).toLowerCase();
     let discountValue = 0;
     if (type === "percentage") {
-      discountValue = Number(req.body.discountPercent ?? order.discountPercent) || 0;
+      discountValue =
+        Number(req.body.discountPercent ?? order.discountPercent) || 0;
     } else {
-      discountValue = Number(req.body.discountAmount ?? order.discountAmount) || 0;
+      discountValue =
+        Number(req.body.discountAmount ?? order.discountAmount) || 0;
     }
-    
+
     const totals = computeRepairOrderTotalsWithDiscount(
       normalizedServices,
       normalizedParts,
@@ -666,7 +676,10 @@ const getCancelledOrders = asyncHandler(async (req, res) => {
   const [orders, total] = await Promise.all([
     RepairOrder.find(filter)
       .populate("customerId", "fullName phoneNo")
-      .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
+      .populate(
+        "vehicleId",
+        "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven",
+      )
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(safeLimit)
@@ -705,7 +718,10 @@ const tallyExport = asyncHandler(async (req, res) => {
 
   const orders = await RepairOrder.find(filter)
     .populate("customerId", "fullName phoneNo emailId")
-    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
+    .populate(
+      "vehicleId",
+      "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven",
+    )
     .sort({ createdAt: 1 })
     .lean();
 
@@ -787,7 +803,10 @@ const getCalendarOrders = asyncHandler(async (req, res) => {
     ],
   })
     .populate("customerId", "fullName phoneNo")
-    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
+    .populate(
+      "vehicleId",
+      "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven",
+    )
     .select(
       "orderNo scheduledAt estimatedDeliveryAt createdAt status customerId vehicleId services",
     )
@@ -872,7 +891,8 @@ async function syncManualRepairOrderItems(garageId, services = [], parts = []) {
       .lean();
 
     if (!service) {
-      const price = Number(line?.price ?? line?.mrp ?? line?.lineTotal ?? 0) || 0;
+      const price =
+        Number(line?.price ?? line?.mrp ?? line?.lineTotal ?? 0) || 0;
       // Retry up to 5x to dodge race conditions on the serviceNo sequence.
       let created;
       for (let attempt = 0; attempt < 5; attempt++) {
@@ -909,10 +929,7 @@ async function syncManualRepairOrderItems(garageId, services = [], parts = []) {
   const syncedParts = await Promise.all(
     (Array.isArray(parts) ? parts : []).map(async (line) => {
       const existingId =
-        line?.inventoryId ||
-        line?.itemId ||
-        line?.part?._id ||
-        line?.part?.id;
+        line?.inventoryId || line?.itemId || line?.part?._id || line?.part?.id;
       const manual = isManualPartLine(line);
 
       if (!manual || existingId) {

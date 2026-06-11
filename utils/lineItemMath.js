@@ -8,7 +8,9 @@ function roundPercent(value) {
 }
 
 function clampDiscount(value, maxBase) {
-  return roundCurrency(Math.min(Number(value) || 0, Math.max(Number(maxBase) || 0, 0)));
+  return roundCurrency(
+    Math.min(Number(value) || 0, Math.max(Number(maxBase) || 0, 0)),
+  );
 }
 
 function toName(value, fallback) {
@@ -17,7 +19,9 @@ function toName(value, fallback) {
 }
 
 function pickFirstDefined(...values) {
-  return values.find((value) => value !== undefined && value !== null && value !== "");
+  return values.find(
+    (value) => value !== undefined && value !== null && value !== "",
+  );
 }
 
 function pickNestedId(value) {
@@ -125,19 +129,29 @@ function computeRepairOrderTotals(services = [], parts = []) {
   const taxTotal = roundCurrency(
     [
       ...services.map((line) => {
-        const taxableAmount = roundCurrency((Number(line?.price) || 0) - (Number(line?.discount) || 0));
+        const taxableAmount = roundCurrency(
+          (Number(line?.price) || 0) - (Number(line?.discount) || 0),
+        );
         return computeTaxAmount(taxableAmount, roundPercent(line?.taxPercent));
       }),
       ...parts.map((line) => {
-        const grossAmount = roundCurrency((Number(line?.unitPrice) || 0) * Math.max(Number(line?.quantity) || 1, 1));
-        const taxableAmount = roundCurrency(grossAmount - (Number(line?.discount) || 0));
+        const grossAmount = roundCurrency(
+          (Number(line?.unitPrice) || 0) *
+            Math.max(Number(line?.quantity) || 1, 1),
+        );
+        const taxableAmount = roundCurrency(
+          grossAmount - (Number(line?.discount) || 0),
+        );
         return computeTaxAmount(taxableAmount, roundPercent(line?.taxPercent));
       }),
     ].reduce((sum, value) => sum + value, 0),
   );
 
   const discountAmount = roundCurrency(
-    [...services, ...parts].reduce((sum, line) => sum + (Number(line?.discount) || 0), 0),
+    [...services, ...parts].reduce(
+      (sum, line) => sum + (Number(line?.discount) || 0),
+      0,
+    ),
   );
 
   return {
@@ -197,7 +211,11 @@ function computeInvoiceTotals(services = [], parts = [], discountAmount = 0) {
   const taxAmount = roundCurrency(
     [...services, ...parts].reduce(
       (sum, line) =>
-        sum + computeTaxAmount(Number(line?.lineTotal) || 0, roundPercent(line?.taxPercent)),
+        sum +
+        computeTaxAmount(
+          Number(line?.lineTotal) || 0,
+          roundPercent(line?.taxPercent),
+        ),
       0,
     ),
   );
@@ -241,7 +259,7 @@ function computeRepairOrderTotalsWithDiscount(
   services = [],
   parts = [],
   discountType = "rupees",
-  discountValue = 0
+  discountValue = 0,
 ) {
   const servicesTotal = roundCurrency(
     services.reduce((sum, line) => sum + (Number(line?.lineTotal) || 0), 0),
@@ -253,23 +271,37 @@ function computeRepairOrderTotalsWithDiscount(
   const taxTotal = roundCurrency(
     [
       ...services.map((line) => {
-        const taxableAmount = roundCurrency((Number(line?.price) || 0) - (Number(line?.discount) || 0));
+        const taxableAmount = roundCurrency(
+          (Number(line?.price) || 0) - (Number(line?.discount) || 0),
+        );
         return computeTaxAmount(taxableAmount, roundPercent(line?.taxPercent));
       }),
       ...parts.map((line) => {
-        const grossAmount = roundCurrency((Number(line?.unitPrice) || 0) * Math.max(Number(line?.quantity) || 1, 1));
-        const taxableAmount = roundCurrency(grossAmount - (Number(line?.discount) || 0));
+        const grossAmount = roundCurrency(
+          (Number(line?.unitPrice) || 0) *
+            Math.max(Number(line?.quantity) || 1, 1),
+        );
+        const taxableAmount = roundCurrency(
+          grossAmount - (Number(line?.discount) || 0),
+        );
         return computeTaxAmount(taxableAmount, roundPercent(line?.taxPercent));
       }),
     ].reduce((sum, value) => sum + value, 0),
   );
 
   const lineItemDiscount = roundCurrency(
-    [...services, ...parts].reduce((sum, line) => sum + (Number(line?.discount) || 0), 0),
+    [...services, ...parts].reduce(
+      (sum, line) => sum + (Number(line?.discount) || 0),
+      0,
+    ),
   );
 
   const subtotal = roundCurrency(servicesTotal + partsTotal + taxTotal);
-  const appliedDiscount = calculateDiscount(discountType, discountValue, subtotal);
+  const appliedDiscount = calculateDiscount(
+    discountType,
+    discountValue,
+    subtotal,
+  );
   const totalDiscount = roundCurrency(lineItemDiscount + appliedDiscount);
 
   return {
@@ -287,7 +319,7 @@ function computeInvoiceTotalsWithDiscount(
   services = [],
   parts = [],
   discountType = "rupees",
-  discountValue = 0
+  discountValue = 0,
 ) {
   const servicesSubTotal = roundCurrency(
     services.reduce((sum, line) => sum + (Number(line?.lineTotal) || 0), 0),
@@ -298,13 +330,21 @@ function computeInvoiceTotalsWithDiscount(
   const taxAmount = roundCurrency(
     [...services, ...parts].reduce(
       (sum, line) =>
-        sum + computeTaxAmount(Number(line?.lineTotal) || 0, roundPercent(line?.taxPercent)),
+        sum +
+        computeTaxAmount(
+          Number(line?.lineTotal) || 0,
+          roundPercent(line?.taxPercent),
+        ),
       0,
     ),
   );
 
   const subtotal = roundCurrency(servicesSubTotal + partsSubTotal + taxAmount);
-  const appliedDiscount = calculateDiscount(discountType, discountValue, subtotal);
+  const appliedDiscount = calculateDiscount(
+    discountType,
+    discountValue,
+    subtotal,
+  );
 
   return {
     servicesSubTotal,

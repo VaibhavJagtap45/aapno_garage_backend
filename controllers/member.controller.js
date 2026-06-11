@@ -6,6 +6,7 @@ const { sendSuccess, sendError } = require("../utils/response.utils");
 const RepairOrder = require("../models/RepairOrder.model");
 const Inventory = require("../models/Inventry.model");
 const User = require("../models/User.model");
+const escapeRegex = require("../utils/escapeRegex");
 
 // Valid status transitions a member can make
 const STATUS_TRANSITIONS = {
@@ -227,6 +228,10 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
   if (!order.assignedTo) {
     order.assignedTo = req.user._id;
     order.assignedAt = new Date();
+  }
+  // Stamp completion time once — feeds the mechanic's monthly bonus count.
+  if (status === "completed" && !order.completedAt) {
+    order.completedAt = new Date();
   }
   await order.save();
 

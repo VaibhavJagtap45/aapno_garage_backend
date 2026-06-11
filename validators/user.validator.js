@@ -117,6 +117,16 @@ const addUserSchema = z
       }),
     }),
 
+    // ── Payroll (member / mechanic only) ───────────────────────
+    baseSalary: z.preprocess(
+      (v) => (v === "" || v === null || v === undefined ? undefined : Number(v)),
+      z
+        .number({ invalid_type_error: "Salary must be a number" })
+        .min(0, "Salary cannot be negative")
+        .max(99999999, "Salary value is too large")
+        .optional(),
+    ),
+
     // ── Vehicle fields (only used when role === customer) ──────
     vehicleBrand: z.string().trim().optional(),
     vehicleModel: z.string().trim().optional(),

@@ -9,11 +9,13 @@ const {
   setPaymentStatus,
   deleteInvoice,
   getInvoiceStats,
+  getMarginReport,
 } = require("../controllers/invoice.controller");
 
 router.use(adminProtect);
 
 router.get("/stats", adminActAsGarage(), getInvoiceStats);
+router.get("/margin-report", adminActAsGarage(), getMarginReport);
 router.get("/", adminActAsGarage(), listInvoices);
 router.get("/:id", adminActAsGarage(), getInvoice);
 router.post("/", adminActAsGarage(), createInvoice);

@@ -161,7 +161,7 @@ const getUsersByRole = asyncHandler(async (req, res) => {
   }
 
   const users = await User.find(filter)
-    .select("-otp -refreshToken -__v")
+    .select("-otp -refreshToken -__v -password -pushToken")
     .sort({ createdAt: -1 })
     .lean();
 
@@ -188,7 +188,7 @@ const getUserDetail = asyncHandler(async (req, res) => {
   const { userId } = req.params;
 
   const user = await User.findById(userId)
-    .select("-otp -refreshToken -__v")
+    .select("-otp -refreshToken -__v -password -pushToken")
     .lean();
 
   if (!user) {
@@ -259,6 +259,74 @@ const getUserDetail = asyncHandler(async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────
+//  UPDATE USER BY ID
+//  PUT /api/v1/members/:id   PUT /api/v1/vendors/:id   PUT /api/v1/customers/:id
+//  Access: Owner only — must belong to their garage
+// ─────────────────────────────────────────────────────────────────
+const updateUser = asyncHandler(async (req, res) => {
+  if (req.user.role !== "owner") {
+    return sendError(res, 403, "Access denied. Only owners can update users.");
+  }
+
+  const { userId } = req.params;
+  const user = await User.findById(userId);
+  if (!user) return sendError(res, 404, "User not found.");
+
+  // Scope check — can only update users that belong to this garage
+  const garage = await Garage.findOne({ owner: req.user._id }).lean();
+  if (!garage || String(user.garage) !== String(garage._id)) {
+    return sendError(res, 403, "You can only update users from your own garage.");
+  }
+
+  const { fullName, phoneNo, emailId, address, baseSalary } = req.body;
+
+  // Duplicate guard for phone / email — must not collide with another user.
+  const orConditions = [];
+  if (phoneNo && phoneNo !== user.phoneNo) orConditions.push({ phoneNo });
+  if (emailId && emailId.toLowerCase() !== user.emailId) {
+    orConditions.push({ emailId: emailId.toLowerCase() });
+  }
+  if (orConditions.length > 0) {
+    const existing = await User.findOne({
+      _id: { $ne: userId },
+      $or: orConditions,
+    }).lean();
+    if (existing) {
+      const conflict =
+        existing.phoneNo === phoneNo ? "phone number" : "email address";
+      return sendError(
+        res,
+        409,
+        `Another user with this ${conflict} already exists.`,
+      );
+    }
+  }
+
+  if (fullName !== undefined && fullName.trim()) user.fullName = fullName.trim();
+  if (phoneNo !== undefined && phoneNo) user.phoneNo = phoneNo;
+  if (emailId !== undefined) {
+    user.emailId = emailId ? emailId.toLowerCase() : user.emailId;
+  }
+  if (address !== undefined) user.address = address;
+  // Base salary only applies to members (mechanics).
+  if (
+    user.role === "member" &&
+    baseSalary !== undefined &&
+    baseSalary !== null &&
+    baseSalary !== ""
+  ) {
+    user.baseSalary = Number(baseSalary);
+  }
+
+  await user.save();
+
+  const safe = await User.findById(userId)
+    .select("-otp -refreshToken -__v -password -pushToken")
+    .lean();
+  return sendSuccess(res, 200, "User updated successfully.", { user: safe });
+});
+
+// ─────────────────────────────────────────────────────────────────
 //  DELETE USER BY ID
 //  DELETE /api/v1/customers/:id
 //  Access: Owner only — must belong to their garage
@@ -282,7 +350,13 @@ const deleteUser = asyncHandler(async (req, res) => {
   await User.findByIdAndDelete(userId);
   await Vehicle.deleteMany({ user: userId }); // cascade-delete linked vehicles
 
-  return sendSuccess(res, 200, "Customer deleted successfully.");
+  const noun =
+    user.role === "member"
+      ? "Member"
+      : user.role === "vendor"
+        ? "Vendor"
+        : "Customer";
+  return sendSuccess(res, 200, `${noun} deleted successfully.`);
 });
 
-module.exports = { getUsersByRole, getUserDetail, deleteUser };
+module.exports = { getUsersByRole, getUserDetail, updateUser, deleteUser };

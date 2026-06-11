@@ -8,6 +8,7 @@ const helmet = require("helmet");
 const cookieParser = require("cookie-parser");
 const rateLimit = require("express-rate-limit");
 const { connectDB } = require("./config/dbConnect");
+const { startReminderScheduler } = require("./services/reminderScheduler");
 const AuthRoutes = require("./routes/auth.routes");
 const UserRoutes = require("./routes/user.routes");
 const UserListRoutes = require("./routes/Userlist.routes");
@@ -27,9 +28,11 @@ const MemberRoutes = require("./routes/member.routes");
 const AdminRoutes = require("./routes/admin.routes");
 const AdminInvoiceRoutes = require("./routes/adminInvoice.routes");
 const AdminRepairOrderRoutes = require("./routes/adminRepairOrder.routes");
+const AdminServiceReminderRoutes = require("./routes/adminServiceReminder.routes");
 const BookingRoutes = require("./routes/booking.routes");
 const ReportsRoutes = require("./routes/reports.routes");
 const InventoryTransferRoutes = require("./routes/inventoryTransfer.routes");
+const PayrollRoutes = require("./routes/payroll.routes");
 // const VehicleMetaRoutes = require("./routes/vehicleMeta.routes");
 const app = express(); //express js
 const PORT = process.env.PORT || 5000;
@@ -90,6 +93,7 @@ const API_VERSION = process.env.BACKEND_VERSION ?? "v1";
 app.use(`/api/${API_VERSION}/auth`, AuthRoutes);
 app.use(`/api/${API_VERSION}/admin/invoices`, AdminInvoiceRoutes); // before generic AdminRoutes
 app.use(`/api/${API_VERSION}/admin/repair-orders`, AdminRepairOrderRoutes);
+app.use(`/api/${API_VERSION}/admin/service-reminders`, AdminServiceReminderRoutes);
 app.use(`/api/${API_VERSION}/admin`, AdminRoutes); // must be before UserListRoutes (no-prefix catch-all)
 app.use(`/api/${API_VERSION}/user`, UserRoutes);
 app.use(`/api/${API_VERSION}/vehicle`, VehicleRoutes);
@@ -109,6 +113,7 @@ app.use(`/api/${API_VERSION}/member`, MemberRoutes);
 app.use(`/api/${API_VERSION}/bookings`, BookingRoutes);
 app.use(`/api/${API_VERSION}/reports`, ReportsRoutes);
 app.use(`/api/${API_VERSION}/inventory-transfers`, InventoryTransferRoutes);
+app.use(`/api/${API_VERSION}/payroll`, PayrollRoutes);
 // ── 404 handler ────────────────────────────────────────────────────
 app.use((_req, res) =>
   res.status(404).json({ success: false, message: "Route not found." }),
@@ -146,6 +151,8 @@ connectDB()
     app.listen(PORT, () =>
       console.log(`Server running on PORT ${PORT} [${process.env.NODE_ENV}]`),
     );
+    // Background sweep that fires due service reminders (WhatsApp + push).
+    startReminderScheduler();
   })
   .catch((err) => {
     console.error("DB connection failed:", err);

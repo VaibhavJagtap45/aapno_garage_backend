@@ -59,6 +59,27 @@ const TEMPLATES = {
     data:  { type: "REPAIR_COMPLETED", orderNo },
   }),
 
+  // Customer receives right after the invoice is generated — confirms the
+  // service is done and tells them when the next one is due.
+  SERVICE_DONE: ({ serviceLabel, nextServiceKm, dueDateLabel }) => ({
+    title: "Service Completed ✅",
+    body:
+      `${serviceLabel || "Your service"} is done.` +
+      (nextServiceKm ? ` Next service at ${nextServiceKm} km` : "") +
+      (dueDateLabel ? ` (around ${dueDateLabel}).` : "."),
+    data:  { type: "SERVICE_DONE" },
+  }),
+
+  // Customer receives when a service reminder falls due.
+  SERVICE_REMINDER_DUE: ({ serviceLabel, nextServiceKm, garageName }) => ({
+    title: "Service Reminder 🔔",
+    body:
+      `${serviceLabel || "Your next service"} is due` +
+      (nextServiceKm ? ` around ${nextServiceKm} km` : " soon") +
+      `. Book a slot at ${garageName || "your garage"}.`,
+    data:  { type: "SERVICE_REMINDER_DUE" },
+  }),
+
   // ── Owner / Staff ─────────────────────────────────────────────────────────
 
   // Owner receives when a new repair order is created (by owner or customer)

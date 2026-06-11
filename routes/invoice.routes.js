@@ -10,12 +10,16 @@ const {
   setPaymentStatus,
   deleteInvoice,
   getInvoiceStats,
+  getMarginReport,
 } = require("../controllers/invoice.controller");
 
 router.use(protect, checkSubscription);
 
 // GET  /api/v1/invoices/stats?dateFrom=&dateTo=
 router.get("/stats", getInvoiceStats);
+
+// GET  /api/v1/invoices/margin-report?dateFrom=&dateTo=&branch=
+router.get("/margin-report", getMarginReport);
 
 // GET  /api/v1/invoices?status=&customerId=&page=&limit=
 router.get("/", listInvoices);

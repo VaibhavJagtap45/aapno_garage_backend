@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const Invoice = require("../models/Invoice.model");
 const RepairOrder = require("../models/RepairOrder.model");
+const Inventory = require("../models/Inventry.model");
 const asyncHandler = require("../utils/asyncHandler");
 const { sendSuccess, sendError } = require("../utils/response.utils");
 const escapeRegex = require("../utils/escapeRegex");
@@ -12,13 +13,19 @@ const {
 } = require("../utils/lineItemMath");
 const { assertCustomerAndVehicle } = require("../utils/assertOwnership");
 const { applyInventoryDelta } = require("../utils/inventoryTxn");
+const { createReminderForInvoice } = require("../services/customerReminder.service");
 
 function clampAmount(value, max) {
   const amount = Number(value) || 0;
   return Math.min(Math.max(amount, 0), Math.max(Number(max) || 0, 0));
 }
 
-function resolvePaidAmount(paymentStatus, totalAmount, paidAmount, existingPaidAmount = 0) {
+function resolvePaidAmount(
+  paymentStatus,
+  totalAmount,
+  paidAmount,
+  existingPaidAmount = 0,
+) {
   if (paymentStatus === "paid") return Number(totalAmount) || 0;
   if (paymentStatus === "unpaid") return 0;
   if (paymentStatus === "partial") {
@@ -30,7 +37,10 @@ function resolvePaidAmount(paymentStatus, totalAmount, paidAmount, existingPaidA
 // ─── Helper ───────────────────────────────────────────────────────
 const resolveGarageId = require("../utils/resolveGarageId");
 const incrementUsage = require("../utils/incrementUsage");
-const { resolveFranchiseAccountsScope, garageFilter } = require("../utils/resolveFranchiseAccountsScope");
+const {
+  resolveFranchiseAccountsScope,
+  garageFilter,
+} = require("../utils/resolveFranchiseAccountsScope");
 
 async function nextInvoiceNo(garageId) {
   const count = await Invoice.countDocuments({ garageId });
@@ -45,7 +55,17 @@ const listInvoices = asyncHandler(async (req, res) => {
   const scope = await resolveFranchiseAccountsScope(req.user, req.query.branch);
   if (!scope) return sendError(res, 404, "Garage not found.");
 
-  const { status, customerId, repairOrderId, paymentStatus, dateFrom, dateTo, search, page = 1, limit = 20 } = req.query;
+  const {
+    status,
+    customerId,
+    repairOrderId,
+    paymentStatus,
+    dateFrom,
+    dateTo,
+    search,
+    page = 1,
+    limit = 20,
+  } = req.query;
   const filter = { garageId: garageFilter(scope), isDeleted: false };
   if (status) filter.status = status;
   if (customerId) filter.customerId = customerId;
@@ -54,7 +74,7 @@ const listInvoices = asyncHandler(async (req, res) => {
   if (dateFrom || dateTo) {
     filter.createdAt = {};
     if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
-    if (dateTo)   filter.createdAt.$lte = new Date(dateTo);
+    if (dateTo) filter.createdAt.$lte = new Date(dateTo);
   }
 
   if (search && search.trim()) {
@@ -77,7 +97,10 @@ const listInvoices = asyncHandler(async (req, res) => {
   const [invoices, total] = await Promise.all([
     Invoice.find(filter)
       .populate("customerId", "fullName phoneNo emailId")
-      .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
+      .populate(
+        "vehicleId",
+        "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven",
+      )
       .populate("garageId", "garageName")
       .sort({ createdAt: -1 })
       .skip((safePage - 1) * safeLimit)
@@ -107,7 +130,10 @@ const getInvoice = asyncHandler(async (req, res) => {
     isDeleted: false,
   })
     .populate("customerId", "fullName phoneNo emailId")
-    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
+    .populate(
+      "vehicleId",
+      "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven",
+    )
     .populate("repairOrderId", "orderNo status")
     .lean();
 
@@ -138,6 +164,11 @@ const createInvoice = asyncHandler(async (req, res) => {
     notifyCustomer = false,
     notes = null,
     paymentMode = "cash",
+    // ── km-based service reminder (optional) ──────────────────────
+    // { enabled, serviceLabel?, nextServiceKm?, serviceIntervalKm?,
+    //   dailyRunningKm?, dueDate?, channels?, notifyDaysBefore?, notes? }
+    reminder = null,
+    odometerReading = null,
   } = req.body;
 
   // If coming from a repair order — prefill from it
@@ -166,7 +197,7 @@ const createInvoice = asyncHandler(async (req, res) => {
 
   const normalizedServices = normalizeInvoiceServiceLines(services);
   const normalizedParts = normalizeInvoicePartLines(parts);
-  
+
   // Determine discount value based on type
   let discountValue = 0;
   const type = String(discountType || "rupees").toLowerCase();
@@ -175,7 +206,7 @@ const createInvoice = asyncHandler(async (req, res) => {
   } else {
     discountValue = Number(discountAmount) || 0;
   }
-  
+
   const totals = computeInvoiceTotalsWithDiscount(
     normalizedServices,
     normalizedParts,
@@ -243,8 +274,57 @@ const createInvoice = asyncHandler(async (req, res) => {
   // Populate so the frontend can display customer & vehicle immediately
   const invoice = await Invoice.findById(createdId)
     .populate("customerId", "fullName phoneNo emailId")
-    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
+    .populate(
+      "vehicleId",
+      "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven",
+    )
     .lean();
+
+  // ── Service reminder (optional) ───────────────────────────────────
+  // When staff toggle the km-based reminder on, persist a ServiceReminder
+  // and fire the immediate "service done — next service due …" message on
+  // WhatsApp + push. Fully fire-and-forget: createReminderForInvoice never
+  // throws, so a messaging outage cannot fail the invoice write.
+  if (reminder && reminder.enabled) {
+    const odo =
+      odometerReading != null && odometerReading !== ""
+        ? Number(odometerReading)
+        : null;
+    createReminderForInvoice({
+      garageId,
+      customerId,
+      vehicleId: vehicleId || null,
+      invoiceId: createdId,
+      repairOrderId: repairOrderId || null,
+      serviceLabel:
+        (reminder.serviceLabel || "").trim() ||
+        normalizedServices[0]?.name ||
+        "Service",
+      currentOdometer: odo,
+      nextServiceKm:
+        reminder.nextServiceKm != null && reminder.nextServiceKm !== ""
+          ? Number(reminder.nextServiceKm)
+          : null,
+      serviceIntervalKm:
+        reminder.serviceIntervalKm != null && reminder.serviceIntervalKm !== ""
+          ? Number(reminder.serviceIntervalKm)
+          : null,
+      dailyRunningKm:
+        reminder.dailyRunningKm != null && reminder.dailyRunningKm !== ""
+          ? Number(reminder.dailyRunningKm)
+          : null,
+      dueDate: reminder.dueDate || null,
+      channels:
+        Array.isArray(reminder.channels) && reminder.channels.length
+          ? reminder.channels
+          : undefined,
+      notifyDaysBefore:
+        reminder.notifyDaysBefore != null && reminder.notifyDaysBefore !== ""
+          ? Number(reminder.notifyDaysBefore)
+          : undefined,
+      notes: (reminder.notes || "").trim(),
+    });
+  }
 
   return sendSuccess(res, 201, "Invoice created.", { invoice });
 });
@@ -266,7 +346,14 @@ const updateInvoice = asyncHandler(async (req, res) => {
   const previousParts = invoice.parts.map((part) =>
     typeof part.toObject === "function" ? part.toObject() : part,
   );
-  const { services, parts, discountAmount, discountType, discountPercent, ...rest } = req.body;
+  const {
+    services,
+    parts,
+    discountAmount,
+    discountType,
+    discountPercent,
+    ...rest
+  } = req.body;
 
   // Tenant isolation for reassigned customer/vehicle. The update path
   // allows changing customerId/vehicleId, so we must re-verify against
@@ -290,11 +377,15 @@ const updateInvoice = asyncHandler(async (req, res) => {
     discountType !== undefined ||
     discountPercent !== undefined
   ) {
-    const newServices = normalizeInvoiceServiceLines(services ?? invoice.services);
+    const newServices = normalizeInvoiceServiceLines(
+      services ?? invoice.services,
+    );
     const newParts = normalizeInvoicePartLines(parts ?? invoice.parts);
-    
+
     // Determine discount value based on type
-    const type = String(discountType ?? invoice.discountType ?? "rupees").toLowerCase();
+    const type = String(
+      discountType ?? invoice.discountType ?? "rupees",
+    ).toLowerCase();
     let discountValue = 0;
     if (type === "percentage") {
       discountValue = Number(discountPercent ?? invoice.discountPercent) || 0;
@@ -302,7 +393,12 @@ const updateInvoice = asyncHandler(async (req, res) => {
       discountValue = Number(discountAmount ?? invoice.discountAmount) || 0;
     }
 
-    const totals = computeInvoiceTotalsWithDiscount(newServices, newParts, type, discountValue);
+    const totals = computeInvoiceTotalsWithDiscount(
+      newServices,
+      newParts,
+      type,
+      discountValue,
+    );
     Object.assign(invoice, {
       services: newServices,
       parts: newParts,
@@ -366,7 +462,10 @@ const updateInvoice = asyncHandler(async (req, res) => {
   // Always return populated refs so frontend can display customer/vehicle name
   const populated = await Invoice.findById(invoice._id)
     .populate("customerId", "fullName phoneNo emailId")
-    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
+    .populate(
+      "vehicleId",
+      "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven",
+    )
     .populate("repairOrderId", "orderNo status")
     .lean();
 
@@ -413,11 +512,16 @@ const setPaymentStatus = asyncHandler(async (req, res) => {
 
   const populated = await Invoice.findById(invoice._id)
     .populate("customerId", "fullName phoneNo emailId")
-    .populate("vehicleId", "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven")
+    .populate(
+      "vehicleId",
+      "vehicleBrand vehicleModel vehicleRegisterNo vehicleKmDriven",
+    )
     .populate("repairOrderId", "orderNo status")
     .lean();
 
-  return sendSuccess(res, 200, "Payment status updated.", { invoice: populated });
+  return sendSuccess(res, 200, "Payment status updated.", {
+    invoice: populated,
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────
@@ -471,7 +575,7 @@ const getInvoiceStats = asyncHandler(async (req, res) => {
   if (dateFrom || dateTo) {
     filter.createdAt = {};
     if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
-    if (dateTo)   filter.createdAt.$lte = new Date(dateTo);
+    if (dateTo) filter.createdAt.$lte = new Date(dateTo);
   }
 
   const [result] = await Invoice.aggregate([
@@ -479,13 +583,19 @@ const getInvoiceStats = asyncHandler(async (req, res) => {
     {
       $group: {
         _id: null,
-        total:  { $sum: "$totalAmount" },
+        total: { $sum: "$totalAmount" },
         paid: {
           $sum: {
             $switch: {
               branches: [
-                { case: { $eq: ["$paymentStatus", "paid"] }, then: "$totalAmount" },
-                { case: { $eq: ["$paymentStatus", "partial"] }, then: { $ifNull: ["$paidAmount", 0] } },
+                {
+                  case: { $eq: ["$paymentStatus", "paid"] },
+                  then: "$totalAmount",
+                },
+                {
+                  case: { $eq: ["$paymentStatus", "partial"] },
+                  then: { $ifNull: ["$paidAmount", 0] },
+                },
               ],
               default: 0,
             },
@@ -495,12 +605,20 @@ const getInvoiceStats = asyncHandler(async (req, res) => {
           $sum: {
             $switch: {
               branches: [
-                { case: { $eq: ["$paymentStatus", "unpaid"] }, then: "$totalAmount" },
+                {
+                  case: { $eq: ["$paymentStatus", "unpaid"] },
+                  then: "$totalAmount",
+                },
                 {
                   case: { $eq: ["$paymentStatus", "partial"] },
                   then: {
                     $max: [
-                      { $subtract: ["$totalAmount", { $ifNull: ["$paidAmount", 0] }] },
+                      {
+                        $subtract: [
+                          "$totalAmount",
+                          { $ifNull: ["$paidAmount", 0] },
+                        ],
+                      },
                       0,
                     ],
                   },
@@ -515,9 +633,81 @@ const getInvoiceStats = asyncHandler(async (req, res) => {
   ]);
 
   return sendSuccess(res, 200, "Invoice stats fetched.", {
-    total:  result?.total  ?? 0,
-    paid:   result?.paid   ?? 0,
+    total: result?.total ?? 0,
+    paid: result?.paid ?? 0,
     credit: result?.credit ?? 0,
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────
+//  GET /api/v1/invoices/margin-report?dateFrom=&dateTo=&branch=
+//  Profitability on invoices: net revenue (ex-tax) − parts cost (COGS).
+//  Service revenue carries no cost of goods, so it counts fully as margin.
+// ─────────────────────────────────────────────────────────────────
+const getMarginReport = asyncHandler(async (req, res) => {
+  const scope = await resolveFranchiseAccountsScope(req.user, req.query.branch);
+  if (!scope) return sendError(res, 404, "Garage not found.");
+
+  const { dateFrom, dateTo } = req.query;
+  const filter = { garageId: garageFilter(scope), isDeleted: false };
+  if (dateFrom || dateTo) {
+    filter.createdAt = {};
+    if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
+    if (dateTo) filter.createdAt.$lte = new Date(dateTo);
+  }
+
+  const invoices = await Invoice.find(filter)
+    .select("totalAmount taxAmount parts")
+    .lean();
+
+  // Resolve part purchase costs (COGS) in a single query.
+  const inventoryIds = [
+    ...new Set(
+      invoices.flatMap((inv) =>
+        (inv.parts || [])
+          .map((p) => p.inventoryId)
+          .filter(Boolean)
+          .map((id) => String(id)),
+      ),
+    ),
+  ];
+
+  let costById = {};
+  if (inventoryIds.length) {
+    const items = await Inventory.find({ _id: { $in: inventoryIds } })
+      .select("purchasePrice")
+      .lean();
+    costById = Object.fromEntries(
+      items.map((it) => [String(it._id), Number(it.purchasePrice) || 0]),
+    );
+  }
+
+  let revenue = 0;
+  let tax = 0;
+  let partsCost = 0;
+  for (const inv of invoices) {
+    revenue += Number(inv.totalAmount) || 0;
+    tax += Number(inv.taxAmount) || 0;
+    for (const p of inv.parts || []) {
+      const unitCost = p.inventoryId ? costById[String(p.inventoryId)] || 0 : 0;
+      partsCost += unitCost * (Number(p.quantity) || 0);
+    }
+  }
+
+  const netRevenue = Number((revenue - tax).toFixed(2));
+  const partsCostRounded = Number(partsCost.toFixed(2));
+  const margin = Number((netRevenue - partsCostRounded).toFixed(2));
+  const marginPercent =
+    netRevenue > 0 ? Math.round((margin / netRevenue) * 100) : 0;
+
+  return sendSuccess(res, 200, "Margin report fetched.", {
+    revenue: Number(revenue.toFixed(2)),
+    tax: Number(tax.toFixed(2)),
+    netRevenue,
+    partsCost: partsCostRounded,
+    margin,
+    marginPercent,
+    invoiceCount: invoices.length,
   });
 });
 
@@ -529,4 +719,5 @@ module.exports = {
   setPaymentStatus,
   deleteInvoice,
   getInvoiceStats,
+  getMarginReport,
 };

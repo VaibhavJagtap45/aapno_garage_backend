@@ -100,6 +100,15 @@ const UserSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+
+    // ── Payroll (mechanics / members) ─────────────────────────────
+    // Fixed monthly base salary. Mechanics who complete >= the monthly
+    // service threshold earn a flat bonus on top (see config/payroll.js).
+    baseSalary: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
   },
   {
     timestamps: true,

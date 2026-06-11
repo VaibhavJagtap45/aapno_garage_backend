@@ -72,10 +72,17 @@ const checkSubscription = require("../middlewares/checkSubscription");
 const {
   getUsersByRole,
   getUserDetail,
+  updateUser,
   deleteUser,
 } = require("../controllers/Userlist.controller");
 
 const guarded = [protect, checkSubscription];
+
+// Map a role-scoped `/:id` route onto the generic `userId` param.
+const useIdParam = (req, res, next) => {
+  req.params.userId = req.params.id;
+  next();
+};
 
 // ── Customers ─────────────────────────────────────────────────────
 router.get(
@@ -122,24 +129,15 @@ router.delete(
   deleteUser,
 );
 
-router.get(
-  "/members/:id",
-  ...guarded,
-  (req, res, next) => {
-    req.params.userId = req.params.id;
-    next();
-  },
-  getUserDetail,
-);
+router.get("/members/:id", ...guarded, useIdParam, getUserDetail);
+router.put("/members/:id", ...guarded, useIdParam, updateUser);
+router.delete("/members/:id", ...guarded, useIdParam, deleteUser);
 
-router.get(
-  "/vendors/:id",
-  ...guarded,
-  (req, res, next) => {
-    req.params.userId = req.params.id;
-    next();
-  },
-  getUserDetail,
-);
+router.get("/vendors/:id", ...guarded, useIdParam, getUserDetail);
+router.put("/vendors/:id", ...guarded, useIdParam, updateUser);
+router.delete("/vendors/:id", ...guarded, useIdParam, deleteUser);
+
+// Customers can be edited too (delete already wired above).
+router.put("/customers/:id", ...guarded, useIdParam, updateUser);
 
 module.exports = router;

@@ -176,6 +176,7 @@ const addUser = asyncHandler(async (req, res) => {
     fullName,
     role,
     address,
+    baseSalary,
     // Vehicle fields (customer only)
     vehicleBrand,
     vehicleModel,
@@ -231,6 +232,8 @@ const addUser = asyncHandler(async (req, res) => {
     ...(emailId && { emailId: emailId.toLowerCase() }),
     ...(fullName && { fullName }),
     ...(address && { address }),
+    // Base salary only applies to members (mechanics).
+    ...(role === "member" && baseSalary != null && { baseSalary: Number(baseSalary) }),
     role,
     isVerified: true,
     garage: garage._id,
